@@ -1,0 +1,49 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: link2action-postgres
+    environment:
+      POSTGRES_DB: link2action
+      POSTGRES_USER: link2action
+      POSTGRES_PASSWORD: link2action
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: link2action-rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+
+  bot-service:
+    build:
+      context: ./bot-service
+    container_name: link2action-bot-service
+    depends_on:
+      - postgres
+      - rabbitmq
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/link2action
+      SPRING_DATASOURCE_USERNAME: link2action
+      SPRING_DATASOURCE_PASSWORD: link2action
+      
+      RABBITMQ_HOST: rabbitmq
+      RABBITMQ_PORT: 5672
+      RABBITMQ_USERNAME: guest
+      RABBITMQ_PASSWORD: guest
+      
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-link2actionBot}
+      
+      RESULTS_BASE_PATH: /data/results
+      MAX_ACTIVE_TASKS_PER_USER: 1
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+
+volumes:
+  postgres-data:
