@@ -31,6 +31,6 @@ class AppProperties (
     )
 
     data class Transcription (
-        val maxActiveTaskPerUser: Int
+        val maxActiveTasksPerUser: Int = 1
     )
 }

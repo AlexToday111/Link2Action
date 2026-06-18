@@ -1,6 +1,5 @@
-package com.Link2Action.bot.telegram
+package com.link2action.bot.telegram
 
-import com.link2action.bot.telegram.TelegramMessageSender
 import com.link2action.bot.common.UrlExtractor
 import com.link2action.bot.task.CreateTranscriptionTaskCommand
 import com.link2action.bot.task.TranscriptionTaskService
