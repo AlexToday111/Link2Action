@@ -1,7 +1,6 @@
-package com.linkscribe.bot.config
+package com.link2action.bot.config
 
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.link2action.bot.config.AppProperties
 import org.springframework.amqp.core.Binding
 import org.springframework.amqp.core.BindingBuilder
 import org.springframework.amqp.core.DirectExchange

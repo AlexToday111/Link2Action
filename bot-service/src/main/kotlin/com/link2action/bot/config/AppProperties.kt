@@ -1,8 +1,5 @@
 package com.link2action.bot.config
 
-import org.apache.coyote.Request
-import org.hibernate.annotations.TimeZoneStorage
-import org.springframework.amqp.rabbit.core.RabbitTemplate
 import org.springframework.boot.context.properties.ConfigurationProperties
 
 @ConfigurationProperties(prefix = "app")
@@ -14,7 +11,8 @@ class AppProperties (
 ){
     data class Telegram (
         val botToken: String,
-        val botUserName: String
+        val botUsername: String,
+        val pollingDelayMs: Long = 1000
     )
 
     data class Rabbit(
@@ -27,7 +25,7 @@ class AppProperties (
     )
 
     data class Storage(
-        val resultBasePath: String
+        val resultsBasePath: String
     )
 
     data class Transcription (
