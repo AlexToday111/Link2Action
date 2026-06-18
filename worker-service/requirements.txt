@@ -1,0 +1,6 @@
+pika
+pydantic
+pydantic-settings
+yt-dlp
+faster-whisper
+pytest

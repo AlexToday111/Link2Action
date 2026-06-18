@@ -1,0 +1,47 @@
+import logging
+
+from app.config import get_settings
+from app.logging_config import configure_logging
+from app.messaging.rabbitmq import RabbitMqClient
+from app.processing.downloader import AudioDownloader
+from app.processing.exporter import TranscriptExporter
+from app.processing.processor import TranscriptionProcessor
+from app.processing.transcriber import WhisperTranscriber
+
+log = logging.getLogger(__name__)
+
+
+def main() -> None:
+    configure_logging()
+    settings = get_settings()
+
+    settings.results_base_path.mkdir(parents=True, exist_ok=True)
+    settings.downloads_base_path.mkdir(parents=True, exist_ok=True)
+
+    processor = TranscriptionProcessor(
+        settings=settings,
+        downloader=AudioDownloader(
+            downloads_base_path=settings.downloads_base_path,
+            max_duration_seconds=settings.max_video_duration_seconds,
+        ),
+        transcriber=WhisperTranscriber(
+            model_name=settings.whisper_model,
+            device=settings.whisper_device,
+            compute_type=settings.whisper_compute_type,
+        ),
+        exporter=TranscriptExporter(results_base_path=settings.results_base_path),
+    )
+
+    rabbitmq = RabbitMqClient(settings)
+
+    try:
+        rabbitmq.connect()
+        rabbitmq.consume(processor.process)
+    except KeyboardInterrupt:
+        log.info("Worker stopped")
+    finally:
+        rabbitmq.close()
+
+
+if __name__ == "__main__":
+    main()
