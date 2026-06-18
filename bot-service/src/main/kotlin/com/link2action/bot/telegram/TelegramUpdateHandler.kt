@@ -52,14 +52,11 @@ class TelegramUpdateHandler(
     }
 
     private fun handleUpdate(update: TelegramUpdate) {
-        val message = update.message
-
-        if (message == null) {
-            log.debug("Skipping update without message: updateId={}", update.updateId)
-            return
+        when {
+            update.message != null -> commandRouter.route(update.message)
+            update.callbackQuery != null -> commandRouter.routeCallback(update.callbackQuery)
+            else -> log.debug("Skipping unsupported Telegram update: updateId={}", update.updateId)
         }
-
-        commandRouter.route(message)
     }
 }
 
@@ -74,7 +71,18 @@ data class TelegramUpdate(
     @JsonProperty("update_id")
     val updateId: Long,
 
-    val message: TelegramMessage? = null
+    val message: TelegramMessage? = null,
+
+    @JsonProperty("callback_query")
+    val callbackQuery: TelegramCallbackQuery? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class TelegramCallbackQuery(
+    val id: String,
+    val from: TelegramUser,
+    val message: TelegramMessage? = null,
+    val data: String? = null
 )
 
 @JsonIgnoreProperties(ignoreUnknown = true)

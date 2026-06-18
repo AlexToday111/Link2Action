@@ -19,13 +19,18 @@ class TelegramMessageSender(
 
     fun sendText(
         chatId: Long,
-        text: String
+        text: String,
+        replyMarkup: Map<String, Any>? = null
     ) {
         try {
-            val request = SendMessageRequest(
-                chatId = chatId,
-                text = text
+            val request = mutableMapOf<String, Any>(
+                "chat_id" to chatId,
+                "text" to text
             )
+
+            if (replyMarkup != null) {
+                request["reply_markup"] = replyMarkup
+            }
 
             val response = telegramRestClient
                 .post()
@@ -40,6 +45,35 @@ class TelegramMessageSender(
             }
         } catch (ex: Exception) {
             log.error("Failed to send Telegram message: chatId={}", chatId, ex)
+        }
+    }
+
+    fun answerCallbackQuery(
+        callbackQueryId: String,
+        text: String? = null
+    ) {
+        try {
+            val request = mutableMapOf<String, Any>(
+                "callback_query_id" to callbackQueryId
+            )
+
+            if (!text.isNullOrBlank()) {
+                request["text"] = text
+            }
+
+            val response = telegramRestClient
+                .post()
+                .uri("/answerCallbackQuery")
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(request)
+                .retrieve()
+                .body(TelegramApiResponse::class.java)
+
+            if (response == null || !response.ok) {
+                log.warn("Telegram answerCallbackQuery returned non-ok response: {}", response)
+            }
+        } catch (ex: Exception) {
+            log.error("Failed to answer Telegram callback query: callbackQueryId={}", callbackQueryId, ex)
         }
     }
 
@@ -108,11 +142,6 @@ class TelegramMessageSender(
         }
     }
 }
-
-data class SendMessageRequest(
-    val chatId: Long,
-    val text: String
-)
 
 data class TelegramApiResponse(
     val ok: Boolean = false,
