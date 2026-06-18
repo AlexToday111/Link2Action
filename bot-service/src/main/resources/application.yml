@@ -50,6 +50,7 @@ app:
     request-routing-key: transcription.requested
     completed-routing-key: transcription.completed
     failed-routing-key: transcription.failed
+    progress-routing-key: ${RABBITMQ_PROGRESS_ROUTING_KEY:transcription.progress}
 
   storage:
     results-base-path: ${RESULTS_BASE_PATH:/data/results}

@@ -13,13 +13,15 @@ from app.config import Settings
 from app.messaging.events import (
     TranscriptionRequestedEvent,
     TranscriptionResultEvent,
+    TranscriptionStatus,
     extract_task_id,
 )
 from app.processing.processor import build_failed_event
 
 log = logging.getLogger(__name__)
 
-MessageHandler = Callable[[TranscriptionRequestedEvent], TranscriptionResultEvent]
+ProgressPublisher = Callable[[TranscriptionResultEvent], None]
+MessageHandler = Callable[[TranscriptionRequestedEvent, ProgressPublisher], TranscriptionResultEvent]
 
 
 class RabbitMqClient:
@@ -33,18 +35,18 @@ class RabbitMqClient:
             self._settings.rabbitmq_username,
             self._settings.rabbitmq_password,
         )
-        parameters = pika.ConnectionParameters(
+        connection_params = pika.ConnectionParameters(
             host=self._settings.rabbitmq_host,
             port=self._settings.rabbitmq_port,
             credentials=credentials,
-            heartbeat=60,
-            blocked_connection_timeout=300,
+            heartbeat=self._settings.rabbitmq_heartbeat,
+            blocked_connection_timeout=self._settings.rabbitmq_blocked_connection_timeout,
         )
 
         attempts = self._settings.rabbitmq_connection_attempts
         for attempt in range(1, attempts + 1):
             try:
-                self._connection = pika.BlockingConnection(parameters)
+                self._connection = pika.BlockingConnection(connection_params)
                 break
             except AMQPConnectionError:
                 if attempt == attempts:
@@ -58,6 +60,9 @@ class RabbitMqClient:
                     self._settings.rabbitmq_port,
                 )
                 time.sleep(self._settings.rabbitmq_connection_retry_seconds)
+
+        if self._connection is None or self._connection.is_closed:
+            raise AMQPConnectionError("RabbitMQ connection was not established")
 
         self._channel = self._connection.channel()
         self._declare_topology(self._channel)
@@ -97,12 +102,8 @@ class RabbitMqClient:
             self._connection.close()
 
     def publish_result(self, event: TranscriptionResultEvent) -> None:
-        channel = self._require_channel()
-        routing_key = (
-            self._settings.rabbitmq_completed_routing_key
-            if event.status.value == "COMPLETED"
-            else self._settings.rabbitmq_failed_routing_key
-        )
+        channel = self._get_publish_channel()
+        routing_key = self._routing_key_for_status(event.status)
 
         try:
             published = channel.basic_publish(
@@ -119,6 +120,8 @@ class RabbitMqClient:
             raise ResultPublishError("Result event was not routed to a queue") from exc
         except AMQPError as exc:
             raise ResultPublishError("RabbitMQ rejected result event publish") from exc
+        except (OSError, RuntimeError) as exc:
+            raise ResultPublishError("RabbitMQ connection was lost while publishing result event") from exc
 
         if published is False:
             raise ResultPublishError("RabbitMQ did not confirm result event publish")
@@ -129,6 +132,9 @@ class RabbitMqClient:
             event.status.value,
             routing_key,
         )
+
+    def publish_progress(self, event: TranscriptionResultEvent) -> None:
+        self.publish_result(event)
 
     def _handle_delivery(
         self,
@@ -150,31 +156,31 @@ class RabbitMqClient:
                 self.publish_result(result)
             except ResultPublishError:
                 log.exception("Failed to publish invalid-message result taskId=%s", exc.task_id)
-                channel.basic_nack(method.delivery_tag, requeue=True)
+                self._safe_nack(channel, method, task_id=exc.task_id)
                 return
 
-            channel.basic_ack(method.delivery_tag)
+            self._safe_ack(channel, method, task_id=exc.task_id)
             return
 
         if event is None:
-            channel.basic_reject(method.delivery_tag, requeue=False)
+            self._safe_reject(channel, method, requeue=False)
             return
 
         log.info("Received transcription request taskId=%s", event.task_id)
 
         try:
-            result = handler(event)
+            result = handler(event, self.publish_progress)
             self.publish_result(result)
         except ResultPublishError:
             log.exception("Failed to publish result event taskId=%s", event.task_id)
-            channel.basic_nack(method.delivery_tag, requeue=True)
+            self._safe_nack(channel, method, task_id=event.task_id)
             return
         except Exception:
             log.exception("Unexpected worker failure taskId=%s", event.task_id)
-            channel.basic_nack(method.delivery_tag, requeue=True)
+            self._safe_nack(channel, method, task_id=event.task_id)
             return
 
-        channel.basic_ack(method.delivery_tag)
+        self._safe_ack(channel, method, task_id=event.task_id)
 
     def _parse_request(self, body: bytes) -> TranscriptionRequestedEvent | None:
         try:
@@ -216,12 +222,80 @@ class RabbitMqClient:
             exchange=self._settings.rabbitmq_exchange,
             routing_key=self._settings.rabbitmq_failed_routing_key,
         )
+        channel.queue_bind(
+            queue=self._settings.rabbitmq_result_queue,
+            exchange=self._settings.rabbitmq_exchange,
+            routing_key=self._settings.rabbitmq_progress_routing_key,
+        )
+
+    def _routing_key_for_status(self, status: TranscriptionStatus) -> str:
+        if status == TranscriptionStatus.COMPLETED:
+            return self._settings.rabbitmq_completed_routing_key
+
+        if status == TranscriptionStatus.FAILED:
+            return self._settings.rabbitmq_failed_routing_key
+
+        return self._settings.rabbitmq_progress_routing_key
 
     def _require_channel(self) -> BlockingChannel:
         if self._channel is None or self._channel.is_closed:
             raise RuntimeError("RabbitMQ channel is not connected")
 
         return self._channel
+
+    def _get_publish_channel(self) -> BlockingChannel:
+        if self._connection is None or self._connection.is_closed:
+            raise ResultPublishError("RabbitMQ connection is closed")
+
+        if self._channel is None or self._channel.is_closed:
+            raise ResultPublishError("RabbitMQ channel is closed")
+
+        return self._channel
+
+    def _safe_ack(
+        self,
+        channel: BlockingChannel,
+        method: pika.spec.Basic.Deliver,
+        task_id: Any | None = None,
+    ) -> None:
+        if not channel.is_open:
+            log.error("Cannot ack message because channel is closed taskId=%s", task_id)
+            return
+
+        try:
+            channel.basic_ack(method.delivery_tag)
+        except (AMQPError, OSError, RuntimeError):
+            log.exception("Failed to ack message taskId=%s", task_id)
+
+    def _safe_nack(
+        self,
+        channel: BlockingChannel,
+        method: pika.spec.Basic.Deliver,
+        task_id: Any | None = None,
+    ) -> None:
+        if not channel.is_open:
+            log.error("Cannot nack message because channel is closed taskId=%s", task_id)
+            return
+
+        try:
+            channel.basic_nack(method.delivery_tag, requeue=True)
+        except (AMQPError, OSError, RuntimeError):
+            log.exception("Failed to nack message taskId=%s", task_id)
+
+    def _safe_reject(
+        self,
+        channel: BlockingChannel,
+        method: pika.spec.Basic.Deliver,
+        requeue: bool,
+    ) -> None:
+        if not channel.is_open:
+            log.error("Cannot reject message because channel is closed")
+            return
+
+        try:
+            channel.basic_reject(method.delivery_tag, requeue=requeue)
+        except (AMQPError, OSError, RuntimeError):
+            log.exception("Failed to reject message")
 
 
 class ResultPublishError(RuntimeError):

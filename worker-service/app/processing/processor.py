@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Callable
 
 from app.common.time_utils import utc_now
 from app.config import Settings
@@ -12,6 +13,8 @@ from app.processing.exporter import TranscriptExporter
 from app.processing.transcriber import WhisperTranscriber
 
 log = logging.getLogger(__name__)
+
+ProgressPublisher = Callable[[TranscriptionResultEvent], None]
 
 
 class TranscriptionProcessor:
@@ -27,19 +30,43 @@ class TranscriptionProcessor:
         self._transcriber = transcriber
         self._exporter = exporter
 
-    def process(self, event: TranscriptionRequestedEvent) -> TranscriptionResultEvent:
+    def process(
+        self,
+        event: TranscriptionRequestedEvent,
+        progress_publisher: ProgressPublisher | None = None,
+    ) -> TranscriptionResultEvent:
         task_id = event.task_id
 
         try:
             log.info("Downloading taskId=%s", task_id)
+            publish_progress(
+                progress_publisher=progress_publisher,
+                task_id=task_id,
+                status=TranscriptionStatus.DOWNLOADING,
+            )
             downloaded = self._downloader.download(task_id, event.source_url)
 
             requested_language = event.language or self._settings.default_language
             log.info("Transcribing taskId=%s", task_id)
+            publish_progress(
+                progress_publisher=progress_publisher,
+                task_id=task_id,
+                status=TranscriptionStatus.TRANSCRIBING,
+                title=downloaded.title,
+                duration_seconds=downloaded.duration_seconds,
+            )
             transcription = self._transcriber.transcribe(downloaded.path, requested_language)
 
             language = transcription.language or requested_language
             log.info("Exporting taskId=%s", task_id)
+            publish_progress(
+                progress_publisher=progress_publisher,
+                task_id=task_id,
+                status=TranscriptionStatus.EXPORTING,
+                title=downloaded.title,
+                duration_seconds=downloaded.duration_seconds,
+                language=language,
+            )
             exported = self._exporter.export(
                 task_id=task_id,
                 source_url=event.source_url,
@@ -87,6 +114,51 @@ def build_failed_event(task_id, error_message: str) -> TranscriptionResultEvent:
         errorMessage=error_message,
         completedAt=utc_now(),
     )
+
+
+def build_progress_event(
+    task_id,
+    status: TranscriptionStatus,
+    title: str | None = None,
+    duration_seconds: int | None = None,
+    language: str | None = None,
+) -> TranscriptionResultEvent:
+    return TranscriptionResultEvent(
+        taskId=task_id,
+        status=status,
+        title=title,
+        durationSeconds=duration_seconds,
+        language=language,
+        resultTxtPath=None,
+        resultMdPath=None,
+        errorMessage=None,
+        completedAt=None,
+    )
+
+
+def publish_progress(
+    progress_publisher: ProgressPublisher | None,
+    task_id,
+    status: TranscriptionStatus,
+    title: str | None = None,
+    duration_seconds: int | None = None,
+    language: str | None = None,
+) -> None:
+    if progress_publisher is None:
+        return
+
+    try:
+        progress_publisher(
+            build_progress_event(
+                task_id=task_id,
+                status=status,
+                title=title,
+                duration_seconds=duration_seconds,
+                language=language,
+            )
+        )
+    except Exception:
+        log.exception("Failed to publish progress event taskId=%s status=%s", task_id, status.value)
 
 
 def human_readable_error(exc: Exception) -> str:

@@ -1,4 +1,7 @@
 import logging
+import time
+
+from pika.exceptions import AMQPError
 
 from app.config import get_settings
 from app.logging_config import configure_logging
@@ -32,15 +35,23 @@ def main() -> None:
         exporter=TranscriptExporter(results_base_path=settings.results_base_path),
     )
 
-    rabbitmq = RabbitMqClient(settings)
+    while True:
+        rabbitmq = RabbitMqClient(settings)
 
-    try:
-        rabbitmq.connect()
-        rabbitmq.consume(processor.process)
-    except KeyboardInterrupt:
-        log.info("Worker stopped")
-    finally:
-        rabbitmq.close()
+        try:
+            rabbitmq.connect()
+            rabbitmq.consume(processor.process)
+        except KeyboardInterrupt:
+            log.info("Worker stopped")
+            break
+        except (AMQPError, OSError, RuntimeError):
+            log.exception(
+                "RabbitMQ connection lost. Reconnecting in %s seconds",
+                settings.rabbitmq_connection_retry_seconds,
+            )
+            time.sleep(settings.rabbitmq_connection_retry_seconds)
+        finally:
+            rabbitmq.close()
 
 
 if __name__ == "__main__":

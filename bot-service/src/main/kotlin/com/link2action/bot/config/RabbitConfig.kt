@@ -74,6 +74,17 @@ class RabbitConfig(
     }
 
     @Bean
+    fun transcriptionProgressBinding(
+        transcriptionResultsQueue: Queue,
+        linkscribeExchange: DirectExchange
+    ): Binding {
+        return BindingBuilder
+            .bind(transcriptionResultsQueue)
+            .to(linkscribeExchange)
+            .with(appProperties.rabbit.progressRoutingKey)
+    }
+
+    @Bean
     fun rabbitMessageConverter(objectMapper: ObjectMapper): MessageConverter {
         return Jackson2JsonMessageConverter(objectMapper)
     }

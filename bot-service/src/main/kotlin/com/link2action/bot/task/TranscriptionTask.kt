@@ -31,10 +31,22 @@ open class TranscriptionTask(
     open var status: TranscriptionStatus,
 
     @Column(name = "requested_format", nullable = false, length = 32)
-    open val requestedFormat: String,
+    open var requestedFormat: String,
 
     @Column(name = "language", length = 16)
     open var language: String? = null,
+
+    @Column(name = "title", columnDefinition = "text")
+    open var title: String? = null,
+
+    @Column(name = "duration_seconds")
+    open var durationSeconds: Long? = null,
+
+    @Column(name = "last_progress_status", length = 32)
+    open var lastProgressStatus: String? = null,
+
+    @Column(name = "progress_message_id")
+    open var progressMessageId: Long? = null,
 
     @Column(name = "result_txt_path", columnDefinition = "text")
     open var resultTxtPath: String? = null,
@@ -55,8 +67,20 @@ open class TranscriptionTask(
     open var startedAt: Instant? = null,
 
     @Column(name = "finished_at")
-    open var finishedAt: Instant? = null
+    open var finishedAt: Instant? = null,
+
+    @Column(name = "deleted_at")
+    open var deletedAt: Instant? = null
 ) {
+
+    fun markQueued(
+        requestedFormats: Collection<String>,
+        now: Instant
+    ) {
+        status = TranscriptionStatus.QUEUED
+        requestedFormat = requestedFormats.joinToString(",")
+        updatedAt = now
+    }
 
     fun markProcessing(now: Instant) {
         status = TranscriptionStatus.PROCESSING
@@ -67,14 +91,19 @@ open class TranscriptionTask(
     fun markCompleted(
         resultTxtPath: String?,
         resultMdPath: String?,
+        title: String?,
+        durationSeconds: Long?,
         detectedLanguage: String?,
         now: Instant
     ) {
         status = TranscriptionStatus.COMPLETED
         this.resultTxtPath = resultTxtPath
         this.resultMdPath = resultMdPath
+        this.title = title ?: this.title
+        this.durationSeconds = durationSeconds ?: this.durationSeconds
         this.language = detectedLanguage ?: this.language
         this.errorMessage = null
+        this.lastProgressStatus = null
         this.finishedAt = now
         this.updatedAt = now
     }
@@ -85,8 +114,14 @@ open class TranscriptionTask(
     ) {
         status = TranscriptionStatus.FAILED
         this.errorMessage = errorMessage
+        this.lastProgressStatus = null
         this.finishedAt = now
         this.updatedAt = now
+    }
+
+    fun markDeleted(now: Instant) {
+        deletedAt = now
+        updatedAt = now
     }
 
     fun isActive(): Boolean {

@@ -11,7 +11,7 @@ FROM eclipse-temurin:21-jre
 
 WORKDIR /app
 
-COPY --from=build /app/build/libs/linkscribe-bot-service.jar app.jar
+COPY --from=build /app/build/libs/link2action-bot-service.jar app.jar
 
 EXPOSE 8080
 

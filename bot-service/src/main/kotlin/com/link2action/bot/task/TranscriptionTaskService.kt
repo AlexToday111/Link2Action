@@ -5,6 +5,7 @@ import com.link2action.bot.config.AppProperties
 import com.link2action.bot.queue.TranscriptionRequestPublisher
 import com.link2action.bot.queue.TranscriptionRequestedEvent
 import org.slf4j.LoggerFactory
+import org.springframework.data.domain.PageRequest
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.util.UUID
@@ -22,6 +23,37 @@ class TranscriptionTaskService(
         TranscriptionStatus.QUEUED,
         TranscriptionStatus.PROCESSING
     )
+
+    @Transactional
+    fun createWaitingFormatTask(command: CreateTranscriptionTaskCommand): UUID {
+        validateActiveTaskLimit(command.telegramUserId)
+
+        val now = clockProvider.now()
+        val taskId = UUID.randomUUID()
+
+        val task = TranscriptionTask(
+            id = taskId,
+            telegramChatId = command.telegramChatId,
+            telegramUserId = command.telegramUserId,
+            sourceUrl = command.sourceUrl,
+            status = TranscriptionStatus.WAITING_FORMAT,
+            requestedFormat = "PENDING",
+            language = command.language,
+            createdAt = now,
+            updatedAt = now
+        )
+
+        repository.save(task)
+
+        log.info(
+            "Created waiting format transcription task: taskId={}, userId={}, chatId={}",
+            task.id,
+            task.telegramUserId,
+            task.telegramChatId
+        )
+
+        return task.id
+    }
 
     @Transactional
     fun createTask(command: CreateTranscriptionTaskCommand): UUID {
@@ -64,6 +96,93 @@ class TranscriptionTaskService(
         return task.id
     }
 
+    @Transactional
+    fun enqueueWaitingTask(
+        taskId: UUID,
+        telegramUserId: Long,
+        requestedFormats: Collection<String>
+    ): FormatSelectionResult? {
+        val task = repository.findByIdAndTelegramUserIdAndDeletedAtIsNull(
+            id = taskId,
+            telegramUserId = telegramUserId
+        ) ?: return null
+
+        if (task.status != TranscriptionStatus.WAITING_FORMAT) {
+            return FormatSelectionResult(
+                task = task,
+                queued = false,
+                alreadySelected = true
+            )
+        }
+
+        validateActiveTaskLimit(telegramUserId)
+
+        val formats = normalizeFormats(requestedFormats)
+        val now = clockProvider.now()
+        task.markQueued(
+            requestedFormats = formats,
+            now = now
+        )
+
+        publishRequest(task, formats)
+
+        log.info(
+            "Queued transcription task after format selection: taskId={}, formats={}",
+            task.id,
+            formats
+        )
+
+        return FormatSelectionResult(
+            task = task,
+            queued = true,
+            alreadySelected = false
+        )
+    }
+
+    @Transactional
+    fun cancelWaitingTask(
+        taskId: UUID,
+        telegramUserId: Long
+    ): FormatCancelResult? {
+        val task = repository.findByIdAndTelegramUserIdAndDeletedAtIsNull(
+            id = taskId,
+            telegramUserId = telegramUserId
+        ) ?: return null
+
+        if (task.status != TranscriptionStatus.WAITING_FORMAT) {
+            return FormatCancelResult(
+                task = task,
+                cancelled = false
+            )
+        }
+
+        task.markDeleted(clockProvider.now())
+
+        log.info("Cancelled waiting format transcription task: taskId={}", task.id)
+
+        return FormatCancelResult(
+            task = task,
+            cancelled = true
+        )
+    }
+
+    @Transactional
+    fun softDeleteTask(
+        taskId: UUID,
+        telegramUserId: Long
+    ): TranscriptionTask? {
+        val task = repository.findByIdAndTelegramUserIdAndDeletedAtIsNull(
+            id = taskId,
+            telegramUserId = telegramUserId
+        ) ?: return null
+
+        task.markDeleted(clockProvider.now())
+
+        log.info("Soft deleted transcription task: taskId={}, userId={}", task.id, telegramUserId)
+
+        return task
+    }
+
     @Transactional(readOnly = true)
     fun getTask(taskId: UUID): TranscriptionTask? {
         return repository.findById(taskId).orElse(null)
@@ -72,6 +191,74 @@ class TranscriptionTaskService(
     @Transactional(readOnly = true)
     fun getUserTasks(telegramUserId: Long): List<TranscriptionTask> {
         return repository.findByTelegramUserIdOrderByCreatedAtDesc(telegramUserId)
+    }
+
+    @Transactional(readOnly = true)
+    fun getLatestUserTasks(
+        telegramUserId: Long,
+        limit: Int
+    ): List<TranscriptionTask> {
+        return repository.findByTelegramUserIdAndDeletedAtIsNullOrderByCreatedAtDesc(
+            telegramUserId,
+            PageRequest.of(0, limit.coerceAtLeast(1))
+        )
+    }
+
+    @Transactional(readOnly = true)
+    fun getActiveUserTasks(telegramUserId: Long): List<TranscriptionTask> {
+        return repository.findByTelegramUserIdAndDeletedAtIsNullAndStatusInOrderByCreatedAtDesc(
+            telegramUserId = telegramUserId,
+            statuses = activeStatuses
+        )
+    }
+
+    @Transactional(readOnly = true)
+    fun getUserTask(
+        taskId: UUID,
+        telegramUserId: Long
+    ): TranscriptionTask? {
+        return repository.findByIdAndTelegramUserIdAndDeletedAtIsNull(
+            id = taskId,
+            telegramUserId = telegramUserId
+        )
+    }
+
+    @Transactional
+    fun repeatTask(
+        taskId: UUID,
+        telegramUserId: Long,
+        telegramChatId: Long
+    ): UUID? {
+        val sourceTask = getUserTask(
+            taskId = taskId,
+            telegramUserId = telegramUserId
+        ) ?: return null
+
+        return createWaitingFormatTask(
+            CreateTranscriptionTaskCommand(
+                telegramChatId = telegramChatId,
+                telegramUserId = telegramUserId,
+                sourceUrl = sourceTask.sourceUrl,
+                language = sourceTask.language
+            )
+        )
+    }
+
+    @Transactional
+    fun clearTaskResultPaths(task: TranscriptionTask) {
+        task.resultTxtPath = null
+        task.resultMdPath = null
+        task.updatedAt = clockProvider.now()
+    }
+
+    @Transactional
+    fun updateProgressMessageId(
+        taskId: UUID,
+        messageId: Long
+    ) {
+        val task = getRequiredTask(taskId)
+        task.progressMessageId = messageId
+        task.updatedAt = clockProvider.now()
     }
 
     @Transactional
@@ -100,6 +287,8 @@ class TranscriptionTaskService(
         taskId: UUID,
         resultTxtPath: String?,
         resultMdPath: String?,
+        title: String? = null,
+        durationSeconds: Long? = null,
         detectedLanguage: String? = null
     ): TranscriptionTask {
         val task = getRequiredTask(taskId)
@@ -118,6 +307,8 @@ class TranscriptionTaskService(
         task.markCompleted(
             resultTxtPath = resultTxtPath,
             resultMdPath = resultMdPath,
+            title = title,
+            durationSeconds = durationSeconds,
             detectedLanguage = detectedLanguage,
             now = now
         )
@@ -125,6 +316,53 @@ class TranscriptionTaskService(
         log.info("Marked transcription task as COMPLETED: taskId={}", task.id)
 
         return task
+    }
+
+    @Transactional
+    fun markProgress(
+        taskId: UUID,
+        progressStatus: String,
+        title: String?,
+        durationSeconds: Long?,
+        language: String?
+    ): ProgressUpdateResult {
+        val task = getRequiredTask(taskId)
+        val now = clockProvider.now()
+
+        if (task.status == TranscriptionStatus.COMPLETED || task.status == TranscriptionStatus.FAILED) {
+            log.info(
+                "Ignoring progress event for finished task: taskId={}, progressStatus={}, currentStatus={}",
+                task.id,
+                progressStatus,
+                task.status
+            )
+            return ProgressUpdateResult(task, false)
+        }
+
+        val shouldNotify = task.lastProgressStatus != progressStatus
+
+        if (task.status == TranscriptionStatus.QUEUED) {
+            task.status = TranscriptionStatus.PROCESSING
+        }
+
+        if (task.startedAt == null) {
+            task.startedAt = now
+        }
+
+        task.title = title ?: task.title
+        task.durationSeconds = durationSeconds ?: task.durationSeconds
+        task.language = language ?: task.language
+        task.lastProgressStatus = progressStatus
+        task.updatedAt = now
+
+        log.info(
+            "Updated transcription task progress: taskId={}, progressStatus={}, shouldNotify={}",
+            task.id,
+            progressStatus,
+            shouldNotify
+        )
+
+        return ProgressUpdateResult(task, shouldNotify)
     }
 
     @Transactional
@@ -162,7 +400,7 @@ class TranscriptionTaskService(
             return
         }
 
-        val activeTasksCount = repository.countByTelegramUserIdAndStatusIn(
+        val activeTasksCount = repository.countByTelegramUserIdAndDeletedAtIsNullAndStatusIn(
             telegramUserId = telegramUserId,
             statuses = activeStatuses
         )
@@ -172,6 +410,34 @@ class TranscriptionTaskService(
                 "User $telegramUserId already has $activeTasksCount active transcription task(s)"
             )
         }
+    }
+
+    private fun publishRequest(
+        task: TranscriptionTask,
+        requestedFormats: Collection<String>
+    ) {
+        val event = TranscriptionRequestedEvent(
+            taskId = task.id,
+            sourceUrl = task.sourceUrl,
+            language = task.language,
+            formats = requestedFormats.toList(),
+            createdAt = task.createdAt
+        )
+
+        requestPublisher.publish(event)
+    }
+
+    private fun normalizeFormats(requestedFormats: Collection<String>): List<String> {
+        val formats = requestedFormats
+            .map { it.uppercase() }
+            .filter { it == "TXT" || it == "MD" }
+            .distinct()
+
+        if (formats.isEmpty()) {
+            throw IllegalArgumentException("No supported transcription result formats were requested")
+        }
+
+        return formats
     }
 
     private fun getRequiredTask(taskId: UUID): TranscriptionTask {
@@ -189,3 +455,19 @@ class ActiveTaskLimitExceededException(
 class TranscriptionTaskNotFoundException(
     message: String
 ) : RuntimeException(message)
+
+data class ProgressUpdateResult(
+    val task: TranscriptionTask,
+    val shouldNotify: Boolean
+)
+
+data class FormatSelectionResult(
+    val task: TranscriptionTask,
+    val queued: Boolean,
+    val alreadySelected: Boolean
+)
+
+data class FormatCancelResult(
+    val task: TranscriptionTask,
+    val cancelled: Boolean
+)

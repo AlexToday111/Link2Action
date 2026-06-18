@@ -14,8 +14,9 @@ The worker uses the same exchange, queues, and routing keys as `bot-service`:
 - Request routing key: `transcription.requested`
 - Completed routing key: `transcription.completed`
 - Failed routing key: `transcription.failed`
+- Progress routing key: `transcription.progress`
 
-Requests are consumed from the request queue. Results are published to the configured exchange with the completed or failed routing key.
+Requests are consumed from the request queue. Progress, completion, and failure events are published to the configured exchange with the matching routing key.
 
 ## Environment
 
@@ -31,6 +32,9 @@ Requests are consumed from the request queue. Results are published to the confi
 | `RABBITMQ_REQUEST_ROUTING_KEY` | `transcription.requested` |
 | `RABBITMQ_COMPLETED_ROUTING_KEY` | `transcription.completed` |
 | `RABBITMQ_FAILED_ROUTING_KEY` | `transcription.failed` |
+| `RABBITMQ_PROGRESS_ROUTING_KEY` | `transcription.progress` |
+| `RABBITMQ_HEARTBEAT` | `0` |
+| `RABBITMQ_BLOCKED_CONNECTION_TIMEOUT` | `300` |
 | `RESULTS_BASE_PATH` | `/data/results` |
 | `DOWNLOADS_BASE_PATH` | `/data/downloads` |
 | `WHISPER_MODEL` | `small` |

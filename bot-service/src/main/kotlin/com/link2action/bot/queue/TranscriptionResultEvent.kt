@@ -18,4 +18,7 @@ data class TranscriptionResultEvent(
 object TranscriptionResultStatus {
     const val COMPLETED = "COMPLETED"
     const val FAILED = "FAILED"
+    const val DOWNLOADING = "DOWNLOADING"
+    const val TRANSCRIBING = "TRANSCRIBING"
+    const val EXPORTING = "EXPORTING"
 }

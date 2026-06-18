@@ -21,7 +21,8 @@ class AppProperties (
         val resultQueue: String,
         val requestRoutingKey: String,
         val completedRoutingKey: String,
-        val failedRoutingKey: String
+        val failedRoutingKey: String,
+        val progressRoutingKey: String
     )
 
     data class Storage(

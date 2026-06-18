@@ -7,6 +7,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class TranscriptionStatus(StrEnum):
+    DOWNLOADING = "DOWNLOADING"
+    TRANSCRIBING = "TRANSCRIBING"
+    EXPORTING = "EXPORTING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
 
@@ -36,7 +39,7 @@ class TranscriptionResultEvent(BaseModel):
     result_txt_path: str | None = Field(default=None, alias="resultTxtPath")
     result_md_path: str | None = Field(default=None, alias="resultMdPath")
     error_message: str | None = Field(default=None, alias="errorMessage")
-    completed_at: datetime = Field(alias="completedAt")
+    completed_at: datetime | None = Field(default=None, alias="completedAt")
 
     def to_json_bytes(self) -> bytes:
         return self.model_dump_json(by_alias=True).encode("utf-8")

@@ -38,6 +38,15 @@ class Settings(BaseSettings):
         "transcription.failed",
         validation_alias="RABBITMQ_FAILED_ROUTING_KEY",
     )
+    rabbitmq_progress_routing_key: str = Field(
+        "transcription.progress",
+        validation_alias="RABBITMQ_PROGRESS_ROUTING_KEY",
+    )
+    rabbitmq_heartbeat: int = Field(0, validation_alias="RABBITMQ_HEARTBEAT")
+    rabbitmq_blocked_connection_timeout: int = Field(
+        300,
+        validation_alias="RABBITMQ_BLOCKED_CONNECTION_TIMEOUT",
+    )
     rabbitmq_prefetch_count: int = Field(1, validation_alias="RABBITMQ_PREFETCH_COUNT")
     rabbitmq_connection_attempts: int = Field(30, validation_alias="RABBITMQ_CONNECTION_ATTEMPTS")
     rabbitmq_connection_retry_seconds: float = Field(

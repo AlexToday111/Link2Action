@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.UUID
 
 @Service
 class StorageCleanupService(
@@ -24,6 +25,58 @@ class StorageCleanupService(
             .toAbsolutePath()
             .normalize()
         val tasks = repository.findByTelegramUserIdOrderByCreatedAtDesc(telegramUserId)
+        return cleanupTasks(tasks, basePath)
+    }
+
+    @Transactional
+    fun cleanupTaskStorage(
+        taskId: UUID,
+        telegramUserId: Long
+    ): StorageCleanupResult? {
+        return cleanupTaskFiles(taskId, telegramUserId)
+    }
+
+    @Transactional
+    fun cleanupTaskFiles(
+        taskId: UUID,
+        telegramUserId: Long
+    ): StorageCleanupResult? {
+        val task = repository.findByIdAndTelegramUserIdAndDeletedAtIsNull(
+            id = taskId,
+            telegramUserId = telegramUserId
+        ) ?: return null
+
+        val basePath = Path.of(appProperties.storage.resultsBasePath)
+            .toAbsolutePath()
+            .normalize()
+
+        return cleanupTasks(listOf(task), basePath)
+    }
+
+    @Transactional
+    fun deleteTaskFromHistory(
+        taskId: UUID,
+        telegramUserId: Long
+    ): StorageCleanupResult? {
+        val task = repository.findByIdAndTelegramUserIdAndDeletedAtIsNull(
+            id = taskId,
+            telegramUserId = telegramUserId
+        ) ?: return null
+
+        val basePath = Path.of(appProperties.storage.resultsBasePath)
+            .toAbsolutePath()
+            .normalize()
+        val result = cleanupTasks(listOf(task), basePath)
+
+        task.markDeleted(clockProvider.now())
+
+        return result
+    }
+
+    private fun cleanupTasks(
+        tasks: List<TranscriptionTask>,
+        basePath: Path
+    ): StorageCleanupResult {
         val now = clockProvider.now()
         var deletedFilesCount = 0
         var cleanedTasksCount = 0
@@ -123,8 +176,13 @@ class StorageCleanupService(
     }
 
     private fun isDirectoryEmpty(directory: Path): Boolean {
-        Files.list(directory).use { entries ->
-            return !entries.findAny().isPresent
+        return try {
+            Files.list(directory).use { entries ->
+                !entries.findAny().isPresent
+            }
+        } catch (ex: Exception) {
+            log.warn("Failed to inspect result directory: directory={}", directory, ex)
+            false
         }
     }
 }
