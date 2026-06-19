@@ -17,11 +17,13 @@ from app.messaging.events import (
     extract_task_id,
 )
 from app.processing.processor import build_failed_event
+from app.processing.processor import human_readable_error
 
 log = logging.getLogger(__name__)
 
 ProgressPublisher = Callable[[TranscriptionResultEvent], None]
 MessageHandler = Callable[[TranscriptionRequestedEvent, ProgressPublisher], TranscriptionResultEvent]
+RETRY_COUNT_HEADER = "x-retry-count"
 
 
 class RabbitMqClient:
@@ -144,6 +146,8 @@ class RabbitMqClient:
         body: bytes,
         handler: MessageHandler,
     ) -> None:
+        retry_count = self._retry_count(properties)
+
         try:
             event = self._parse_request(body)
         except InvalidTaskMessageError as exc:
@@ -155,29 +159,45 @@ class RabbitMqClient:
             try:
                 self.publish_result(result)
             except ResultPublishError:
-                log.exception("Failed to publish invalid-message result taskId=%s", exc.task_id)
-                self._safe_nack(channel, method, task_id=exc.task_id)
+                log.exception(
+                    "Failed to publish invalid-message result taskId=%s retryCount=%s",
+                    exc.task_id,
+                    retry_count,
+                )
+                self._safe_nack(channel, method, requeue=True, task_id=exc.task_id)
                 return
 
             self._safe_ack(channel, method, task_id=exc.task_id)
             return
 
         if event is None:
-            self._safe_reject(channel, method, requeue=False)
+            self._safe_reject(channel, method, requeue=False, retry_count=retry_count)
             return
 
-        log.info("Received transcription request taskId=%s", event.task_id)
+        log.info(
+            "Received transcription request taskId=%s retryCount=%s maxRetryAttempts=%s",
+            event.task_id,
+            retry_count,
+            self._settings.rabbitmq_max_retry_attempts,
+        )
 
         try:
             result = handler(event, self.publish_progress)
             self.publish_result(result)
         except ResultPublishError:
             log.exception("Failed to publish result event taskId=%s", event.task_id)
-            self._safe_nack(channel, method, task_id=event.task_id)
+            self._safe_nack(channel, method, requeue=True, task_id=event.task_id)
             return
-        except Exception:
-            log.exception("Unexpected worker failure taskId=%s", event.task_id)
-            self._safe_nack(channel, method, task_id=event.task_id)
+        except Exception as exc:
+            self._handle_processing_failure(
+                channel=channel,
+                method=method,
+                properties=properties,
+                body=body,
+                event=event,
+                retry_count=retry_count,
+                exc=exc,
+            )
             return
 
         self._safe_ack(channel, method, task_id=event.task_id)
@@ -205,11 +225,38 @@ class RabbitMqClient:
             exchange_type="direct",
             durable=True,
         )
-        channel.queue_declare(queue=self._settings.rabbitmq_request_queue, durable=True)
+        channel.queue_declare(
+            queue=self._settings.rabbitmq_request_queue,
+            durable=True,
+            arguments={
+                "x-dead-letter-exchange": self._settings.rabbitmq_exchange,
+                "x-dead-letter-routing-key": self._settings.rabbitmq_dlq_routing_key,
+            },
+        )
         channel.queue_bind(
             queue=self._settings.rabbitmq_request_queue,
             exchange=self._settings.rabbitmq_exchange,
             routing_key=self._settings.rabbitmq_request_routing_key,
+        )
+        channel.queue_declare(
+            queue=self._settings.rabbitmq_request_retry_queue,
+            durable=True,
+            arguments={
+                "x-message-ttl": self._settings.rabbitmq_retry_delay_ms,
+                "x-dead-letter-exchange": self._settings.rabbitmq_exchange,
+                "x-dead-letter-routing-key": self._settings.rabbitmq_request_routing_key,
+            },
+        )
+        channel.queue_bind(
+            queue=self._settings.rabbitmq_request_retry_queue,
+            exchange=self._settings.rabbitmq_exchange,
+            routing_key=self._settings.rabbitmq_retry_routing_key,
+        )
+        channel.queue_declare(queue=self._settings.rabbitmq_request_dlq, durable=True)
+        channel.queue_bind(
+            queue=self._settings.rabbitmq_request_dlq,
+            exchange=self._settings.rabbitmq_exchange,
+            routing_key=self._settings.rabbitmq_dlq_routing_key,
         )
         channel.queue_declare(queue=self._settings.rabbitmq_result_queue, durable=True)
         channel.queue_bind(
@@ -236,6 +283,136 @@ class RabbitMqClient:
             return self._settings.rabbitmq_failed_routing_key
 
         return self._settings.rabbitmq_progress_routing_key
+
+    def _handle_processing_failure(
+        self,
+        channel: BlockingChannel,
+        method: pika.spec.Basic.Deliver,
+        properties: pika.BasicProperties,
+        body: bytes,
+        event: TranscriptionRequestedEvent,
+        retry_count: int,
+        exc: Exception,
+    ) -> None:
+        max_attempts = self._settings.rabbitmq_max_retry_attempts
+
+        if retry_count < max_attempts:
+            next_retry_count = retry_count + 1
+            log.exception(
+                "Processing failed; scheduling retry taskId=%s retryCount=%s nextRetryCount=%s maxRetryAttempts=%s",
+                event.task_id,
+                retry_count,
+                next_retry_count,
+                max_attempts,
+            )
+
+            try:
+                self._publish_retry(
+                    body=body,
+                    properties=properties,
+                    retry_count=next_retry_count,
+                    task_id=event.task_id,
+                )
+            except RetryPublishError:
+                log.exception(
+                    "Failed to publish retry message taskId=%s retryCount=%s maxRetryAttempts=%s",
+                    event.task_id,
+                    retry_count,
+                    max_attempts,
+                )
+                self._safe_nack(channel, method, requeue=True, task_id=event.task_id)
+                return
+
+            self._safe_ack(channel, method, task_id=event.task_id)
+            return
+
+        log.exception(
+            "Processing failed permanently; sending to DLQ taskId=%s retryCount=%s maxRetryAttempts=%s",
+            event.task_id,
+            retry_count,
+            max_attempts,
+        )
+
+        failed_event = build_failed_event(
+            task_id=event.task_id,
+            error_message=human_readable_error(exc),
+        )
+
+        try:
+            self.publish_result(failed_event)
+        except ResultPublishError:
+            log.exception(
+                "Failed to publish final failed event taskId=%s retryCount=%s maxRetryAttempts=%s",
+                event.task_id,
+                retry_count,
+                max_attempts,
+            )
+            self._safe_nack(channel, method, requeue=True, task_id=event.task_id)
+            return
+
+        self._safe_reject(
+            channel,
+            method,
+            requeue=False,
+            task_id=event.task_id,
+            retry_count=retry_count,
+        )
+
+    def _publish_retry(
+        self,
+        body: bytes,
+        properties: pika.BasicProperties,
+        retry_count: int,
+        task_id: Any,
+    ) -> None:
+        channel = self._get_publish_channel()
+        headers = dict(properties.headers or {})
+        headers[RETRY_COUNT_HEADER] = retry_count
+
+        retry_properties = pika.BasicProperties(
+            content_type=properties.content_type or "application/json",
+            content_encoding=properties.content_encoding,
+            delivery_mode=2,
+            correlation_id=properties.correlation_id,
+            headers=headers,
+        )
+
+        try:
+            published = channel.basic_publish(
+                exchange=self._settings.rabbitmq_exchange,
+                routing_key=self._settings.rabbitmq_retry_routing_key,
+                body=body,
+                properties=retry_properties,
+                mandatory=True,
+            )
+        except UnroutableError as exc:
+            raise RetryPublishError("Retry request was not routed to a queue") from exc
+        except AMQPError as exc:
+            raise RetryPublishError("RabbitMQ rejected retry request publish") from exc
+        except (OSError, RuntimeError) as exc:
+            raise RetryPublishError("RabbitMQ connection was lost while publishing retry request") from exc
+
+        if published is False:
+            raise RetryPublishError("RabbitMQ did not confirm retry request publish")
+
+        log.info(
+            "Published retry request taskId=%s retryCount=%s routingKey=%s",
+            task_id,
+            retry_count,
+            self._settings.rabbitmq_retry_routing_key,
+        )
+
+    def _retry_count(self, properties: pika.BasicProperties) -> int:
+        headers = properties.headers or {}
+        value = headers.get(RETRY_COUNT_HEADER, 0)
+
+        try:
+            retry_count = int(value)
+        except (TypeError, ValueError):
+            log.warning("Invalid retry count header value=%s", value)
+            return 0
+
+        return max(retry_count, 0)
 
     def _require_channel(self) -> BlockingChannel:
         if self._channel is None or self._channel.is_closed:
@@ -271,6 +448,7 @@ class RabbitMqClient:
         self,
         channel: BlockingChannel,
         method: pika.spec.Basic.Deliver,
+        requeue: bool,
         task_id: Any | None = None,
     ) -> None:
         if not channel.is_open:
@@ -278,7 +456,7 @@ class RabbitMqClient:
             return
 
         try:
-            channel.basic_nack(method.delivery_tag, requeue=True)
+            channel.basic_nack(method.delivery_tag, requeue=requeue)
         except (AMQPError, OSError, RuntimeError):
             log.exception("Failed to nack message taskId=%s", task_id)
 
@@ -287,18 +465,31 @@ class RabbitMqClient:
         channel: BlockingChannel,
         method: pika.spec.Basic.Deliver,
         requeue: bool,
+        task_id: Any | None = None,
+        retry_count: int | None = None,
     ) -> None:
         if not channel.is_open:
-            log.error("Cannot reject message because channel is closed")
+            log.error("Cannot reject message because channel is closed taskId=%s", task_id)
             return
 
         try:
             channel.basic_reject(method.delivery_tag, requeue=requeue)
+            if not requeue:
+                log.info(
+                    "Rejected message without requeue taskId=%s retryCount=%s dlq=%s",
+                    task_id,
+                    retry_count,
+                    self._settings.rabbitmq_request_dlq,
+                )
         except (AMQPError, OSError, RuntimeError):
-            log.exception("Failed to reject message")
+            log.exception("Failed to reject message taskId=%s", task_id)
 
 
 class ResultPublishError(RuntimeError):
+    pass
+
+
+class RetryPublishError(RuntimeError):
     pass
 
 

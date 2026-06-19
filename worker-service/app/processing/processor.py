@@ -1,5 +1,7 @@
 import logging
-from collections.abc import Callable
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 
 from app.common.time_utils import utc_now
 from app.config import Settings
@@ -44,7 +46,8 @@ class TranscriptionProcessor:
                 task_id=task_id,
                 status=TranscriptionStatus.DOWNLOADING,
             )
-            downloaded = self._downloader.download(task_id, event.source_url)
+            with log_duration("download", task_id):
+                downloaded = self._downloader.download(task_id, event.source_url)
 
             requested_language = event.language or self._settings.default_language
             log.info("Transcribing taskId=%s", task_id)
@@ -55,7 +58,8 @@ class TranscriptionProcessor:
                 title=downloaded.title,
                 duration_seconds=downloaded.duration_seconds,
             )
-            transcription = self._transcriber.transcribe(downloaded.path, requested_language)
+            with log_duration("transcription", task_id):
+                transcription = self._transcriber.transcribe(downloaded.path, requested_language)
 
             language = transcription.language or requested_language
             log.info("Exporting taskId=%s", task_id)
@@ -67,15 +71,16 @@ class TranscriptionProcessor:
                 duration_seconds=downloaded.duration_seconds,
                 language=language,
             )
-            exported = self._exporter.export(
-                task_id=task_id,
-                source_url=event.source_url,
-                title=downloaded.title,
-                duration_seconds=downloaded.duration_seconds,
-                language=language,
-                requested_formats=event.requested_formats,
-                transcription=transcription,
-            )
+            with log_duration("export", task_id):
+                exported = self._exporter.export(
+                    task_id=task_id,
+                    source_url=event.source_url,
+                    title=downloaded.title,
+                    duration_seconds=downloaded.duration_seconds,
+                    language=language,
+                    requested_formats=event.requested_formats,
+                    transcription=transcription,
+                )
 
             log.info("Completed taskId=%s", task_id)
             return TranscriptionResultEvent(
@@ -88,12 +93,6 @@ class TranscriptionProcessor:
                 resultMdPath=str(exported.md_path) if exported.md_path is not None else None,
                 errorMessage=None,
                 completedAt=utc_now(),
-            )
-        except Exception as exc:
-            log.exception("Failed taskId=%s", task_id)
-            return build_failed_event(
-                task_id=task_id,
-                error_message=human_readable_error(exc),
             )
         finally:
             try:
@@ -159,6 +158,21 @@ def publish_progress(
         )
     except Exception:
         log.exception("Failed to publish progress event taskId=%s status=%s", task_id, status.value)
+
+
+@contextmanager
+def log_duration(stage: str, task_id) -> Iterator[None]:
+    started_at = time.monotonic()
+    try:
+        yield
+    finally:
+        duration_seconds = time.monotonic() - started_at
+        log.info(
+            "Worker stage duration taskId=%s stage=%s durationSeconds=%.3f",
+            task_id,
+            stage,
+            duration_seconds,
+        )
 
 
 def human_readable_error(exc: Exception) -> str:

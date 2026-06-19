@@ -22,6 +22,14 @@ class Settings(BaseSettings):
         "linkscribe.transcription.requests",
         validation_alias="RABBITMQ_REQUEST_QUEUE",
     )
+    rabbitmq_request_retry_queue: str = Field(
+        "linkscribe.transcription.requests.retry",
+        validation_alias="RABBITMQ_REQUEST_RETRY_QUEUE",
+    )
+    rabbitmq_request_dlq: str = Field(
+        "linkscribe.transcription.requests.dlq",
+        validation_alias="RABBITMQ_REQUEST_DLQ",
+    )
     rabbitmq_result_queue: str = Field(
         "linkscribe.transcription.results",
         validation_alias="RABBITMQ_RESULT_QUEUE",
@@ -41,6 +49,19 @@ class Settings(BaseSettings):
     rabbitmq_progress_routing_key: str = Field(
         "transcription.progress",
         validation_alias="RABBITMQ_PROGRESS_ROUTING_KEY",
+    )
+    rabbitmq_retry_routing_key: str = Field(
+        "transcription.requested.retry",
+        validation_alias="RABBITMQ_RETRY_ROUTING_KEY",
+    )
+    rabbitmq_dlq_routing_key: str = Field(
+        "transcription.requested.dlq",
+        validation_alias="RABBITMQ_DLQ_ROUTING_KEY",
+    )
+    rabbitmq_retry_delay_ms: int = Field(30000, validation_alias="RABBITMQ_RETRY_DELAY_MS")
+    rabbitmq_max_retry_attempts: int = Field(
+        3,
+        validation_alias="RABBITMQ_MAX_RETRY_ATTEMPTS",
     )
     rabbitmq_heartbeat: int = Field(0, validation_alias="RABBITMQ_HEARTBEAT")
     rabbitmq_blocked_connection_timeout: int = Field(
