@@ -4,3 +4,4 @@ pydantic-settings
 yt-dlp
 faster-whisper
 pytest
+prometheus-client

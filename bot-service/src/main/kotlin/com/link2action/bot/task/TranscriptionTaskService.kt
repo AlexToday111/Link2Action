@@ -2,6 +2,7 @@ package com.link2action.bot.task
 
 import com.link2action.bot.common.ClockProvider
 import com.link2action.bot.config.AppProperties
+import com.link2action.bot.observability.TranscriptionMetrics
 import com.link2action.bot.queue.TranscriptionRequestPublisher
 import com.link2action.bot.queue.TranscriptionRequestedEvent
 import org.slf4j.LoggerFactory
@@ -9,6 +10,7 @@ import org.springframework.data.domain.PageRequest
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 import java.security.MessageDigest
+import java.time.Duration
 import java.util.UUID
 
 @Service
@@ -16,7 +18,8 @@ class TranscriptionTaskService(
     private val repository: TranscriptionTaskRepository,
     private val requestPublisher: TranscriptionRequestPublisher,
     private val appProperties: AppProperties,
-    private val clockProvider: ClockProvider
+    private val clockProvider: ClockProvider,
+    private val transcriptionMetrics: TranscriptionMetrics
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -45,6 +48,7 @@ class TranscriptionTaskService(
         )
 
         repository.save(task)
+        transcriptionMetrics.recordTaskCreated()
 
         log.info(
             "Created waiting format transcription task: taskId={}, userId={}, chatId={}",
@@ -96,6 +100,7 @@ class TranscriptionTaskService(
         )
 
         repository.save(task)
+        transcriptionMetrics.recordTaskCreated()
 
         val event = TranscriptionRequestedEvent(
             taskId = task.id,
@@ -360,6 +365,7 @@ class TranscriptionTaskService(
             detectedLanguage = detectedLanguage,
             now = now
         )
+        transcriptionMetrics.recordTaskCompleted(taskProcessingDuration(task))
 
         log.info("Marked transcription task as COMPLETED: taskId={}", task.id)
 
@@ -435,6 +441,7 @@ class TranscriptionTaskService(
             errorMessage = errorMessage,
             now = now
         )
+        transcriptionMetrics.recordTaskFailed(taskProcessingDuration(task))
 
         log.info("Marked transcription task as FAILED: taskId={}", task.id)
 
@@ -494,6 +501,13 @@ class TranscriptionTaskService(
             idempotencyKey = idempotencyKey,
             statuses = activeStatuses
         )
+    }
+
+    private fun taskProcessingDuration(task: TranscriptionTask): Duration? {
+        val startedAt = task.startedAt ?: task.createdAt
+        val finishedAt = task.finishedAt ?: return null
+
+        return Duration.between(startedAt, finishedAt)
     }
 
     private fun buildIdempotencyKey(

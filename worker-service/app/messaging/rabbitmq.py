@@ -18,6 +18,8 @@ from app.messaging.events import (
 )
 from app.processing.processor import build_failed_event
 from app.processing.processor import human_readable_error
+from app.observability import record_task_failed
+from app.observability import record_task_processed
 
 log = logging.getLogger(__name__)
 
@@ -350,6 +352,8 @@ class RabbitMqClient:
             self._safe_nack(channel, method, requeue=True, task_id=event.task_id)
             return
 
+        record_task_failed()
+        record_task_processed(TranscriptionStatus.FAILED.value)
         self._safe_reject(
             channel,
             method,

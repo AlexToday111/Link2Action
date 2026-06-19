@@ -2,6 +2,7 @@ package com.link2action.bot.queue
 
 import com.link2action.bot.artifact.ArtifactType
 import com.link2action.bot.artifact.TranscriptionTaskArtifactService
+import com.link2action.bot.observability.TranscriptionMetrics
 import com.link2action.bot.task.TranscriptionTask
 import com.link2action.bot.task.TranscriptionTaskService
 import com.link2action.bot.telegram.TelegramMessageSender
@@ -13,7 +14,8 @@ import org.springframework.stereotype.Component
 class TranscriptionResultListener(
     private val taskService: TranscriptionTaskService,
     private val artifactService: TranscriptionTaskArtifactService,
-    private val telegramMessageSender: TelegramMessageSender
+    private val telegramMessageSender: TelegramMessageSender,
+    private val transcriptionMetrics: TranscriptionMetrics
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -24,6 +26,7 @@ class TranscriptionResultListener(
             event.taskId,
             event.status
         )
+        transcriptionMetrics.recordResultEvent(event.status.uppercase())
 
         when (event.status.uppercase()) {
             TranscriptionResultStatus.COMPLETED -> handleCompleted(event)

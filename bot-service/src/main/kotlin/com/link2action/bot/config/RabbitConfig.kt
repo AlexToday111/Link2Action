@@ -30,6 +30,25 @@ class RabbitConfig(
     fun transcriptionRequestsQueue(): Queue {
         return QueueBuilder
             .durable(appProperties.rabbit.requestQueue)
+            .withArgument("x-dead-letter-exchange", appProperties.rabbit.exchange)
+            .withArgument("x-dead-letter-routing-key", appProperties.rabbit.dlqRoutingKey)
+            .build()
+    }
+
+    @Bean
+    fun transcriptionRequestsRetryQueue(): Queue {
+        return QueueBuilder
+            .durable(appProperties.rabbit.requestRetryQueue)
+            .withArgument("x-message-ttl", appProperties.rabbit.retryDelayMs)
+            .withArgument("x-dead-letter-exchange", appProperties.rabbit.exchange)
+            .withArgument("x-dead-letter-routing-key", appProperties.rabbit.requestRoutingKey)
+            .build()
+    }
+
+    @Bean
+    fun transcriptionRequestsDlq(): Queue {
+        return QueueBuilder
+            .durable(appProperties.rabbit.requestDlq)
             .build()
     }
 
@@ -49,6 +68,28 @@ class RabbitConfig(
             .bind(transcriptionRequestsQueue)
             .to(linkscribeExchange)
             .with(appProperties.rabbit.requestRoutingKey)
+    }
+
+    @Bean
+    fun transcriptionRetryBinding(
+        transcriptionRequestsRetryQueue: Queue,
+        linkscribeExchange: DirectExchange
+    ): Binding {
+        return BindingBuilder
+            .bind(transcriptionRequestsRetryQueue)
+            .to(linkscribeExchange)
+            .with(appProperties.rabbit.retryRoutingKey)
+    }
+
+    @Bean
+    fun transcriptionDlqBinding(
+        transcriptionRequestsDlq: Queue,
+        linkscribeExchange: DirectExchange
+    ): Binding {
+        return BindingBuilder
+            .bind(transcriptionRequestsDlq)
+            .to(linkscribeExchange)
+            .with(appProperties.rabbit.dlqRoutingKey)
     }
 
     @Bean

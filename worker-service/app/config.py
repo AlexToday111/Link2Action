@@ -87,6 +87,8 @@ class Settings(BaseSettings):
         3600,
         validation_alias="MAX_VIDEO_DURATION_SECONDS",
     )
+    worker_metrics_enabled: bool = Field(True, validation_alias="WORKER_METRICS_ENABLED")
+    worker_metrics_port: int = Field(9091, validation_alias="WORKER_METRICS_PORT")
 
     @property
     def default_language(self) -> str | None:

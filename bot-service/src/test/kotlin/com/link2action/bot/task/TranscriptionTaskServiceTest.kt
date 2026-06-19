@@ -2,6 +2,7 @@ package com.link2action.bot.task
 
 import com.link2action.bot.common.ClockProvider
 import com.link2action.bot.config.AppProperties
+import com.link2action.bot.observability.TranscriptionMetrics
 import com.link2action.bot.queue.TranscriptionRequestPublisher
 import com.link2action.bot.queue.TranscriptionRequestedEvent
 import org.springframework.amqp.rabbit.core.RabbitTemplate
@@ -22,6 +23,7 @@ class TranscriptionTaskServiceTest {
     private lateinit var publisher: TranscriptionRequestPublisher
     private lateinit var rabbitTemplate: RabbitTemplate
     private lateinit var clockProvider: ClockProvider
+    private lateinit var transcriptionMetrics: TranscriptionMetrics
     private lateinit var service: TranscriptionTaskService
     private lateinit var appProperties: AppProperties
 
@@ -32,6 +34,7 @@ class TranscriptionTaskServiceTest {
         repository = Mockito.mock(TranscriptionTaskRepository::class.java)
         rabbitTemplate = Mockito.mock(RabbitTemplate::class.java)
         clockProvider = Mockito.mock(ClockProvider::class.java)
+        transcriptionMetrics = Mockito.mock(TranscriptionMetrics::class.java)
         appProperties = appProperties()
         publisher = TranscriptionRequestPublisher(rabbitTemplate, appProperties)
 
@@ -50,7 +53,8 @@ class TranscriptionTaskServiceTest {
             repository = repository,
             requestPublisher = publisher,
             appProperties = appProperties,
-            clockProvider = clockProvider
+            clockProvider = clockProvider,
+            transcriptionMetrics = transcriptionMetrics
         )
     }
 
@@ -188,11 +192,16 @@ class TranscriptionTaskServiceTest {
             rabbit = AppProperties.Rabbit(
                 exchange = "linkscribe.exchange",
                 requestQueue = "linkscribe.transcription.requests",
+                requestRetryQueue = "linkscribe.transcription.requests.retry",
+                requestDlq = "linkscribe.transcription.requests.dlq",
                 resultQueue = "linkscribe.transcription.results",
                 requestRoutingKey = "transcription.requested",
+                retryRoutingKey = "transcription.requested.retry",
+                dlqRoutingKey = "transcription.requested.dlq",
                 completedRoutingKey = "transcription.completed",
                 failedRoutingKey = "transcription.failed",
-                progressRoutingKey = "transcription.progress"
+                progressRoutingKey = "transcription.progress",
+                retryDelayMs = 30000
             ),
             storage = AppProperties.Storage(resultsBasePath = "/tmp/results"),
             transcription = AppProperties.Transcription(maxActiveTasksPerUser = 10)

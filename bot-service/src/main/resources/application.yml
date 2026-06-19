@@ -32,7 +32,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,info,metrics
+        include: health,info,metrics,prometheus
   endpoint:
     health:
       show-details: always
@@ -46,11 +46,16 @@ app:
   rabbit:
     exchange: linkscribe.exchange
     request-queue: linkscribe.transcription.requests
+    request-retry-queue: ${RABBITMQ_REQUEST_RETRY_QUEUE:linkscribe.transcription.requests.retry}
+    request-dlq: ${RABBITMQ_REQUEST_DLQ:linkscribe.transcription.requests.dlq}
     result-queue: linkscribe.transcription.results
     request-routing-key: transcription.requested
+    retry-routing-key: ${RABBITMQ_RETRY_ROUTING_KEY:transcription.requested.retry}
+    dlq-routing-key: ${RABBITMQ_DLQ_ROUTING_KEY:transcription.requested.dlq}
     completed-routing-key: transcription.completed
     failed-routing-key: transcription.failed
     progress-routing-key: ${RABBITMQ_PROGRESS_ROUTING_KEY:transcription.progress}
+    retry-delay-ms: ${RABBITMQ_RETRY_DELAY_MS:30000}
 
   storage:
     results-base-path: ${RESULTS_BASE_PATH:/data/results}

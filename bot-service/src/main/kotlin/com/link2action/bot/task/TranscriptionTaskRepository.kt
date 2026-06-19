@@ -16,6 +16,10 @@ interface TranscriptionTaskRepository : JpaRepository<TranscriptionTask, UUID> {
         statuses: Collection<TranscriptionStatus>
     ): Long
 
+    fun countByDeletedAtIsNullAndStatusIn(
+        statuses: Collection<TranscriptionStatus>
+    ): Long
+
     fun findByTelegramUserIdOrderByCreatedAtDesc(
         telegramUserId: Long
     ): List<TranscriptionTask>

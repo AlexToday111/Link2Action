@@ -10,6 +10,8 @@ from app.messaging.events import (
     TranscriptionResultEvent,
     TranscriptionStatus,
 )
+from app.observability import record_stage_duration
+from app.observability import record_task_processed
 from app.processing.downloader import AudioDownloader
 from app.processing.exporter import TranscriptExporter
 from app.processing.transcriber import WhisperTranscriber
@@ -82,7 +84,8 @@ class TranscriptionProcessor:
                     transcription=transcription,
                 )
 
-            log.info("Completed taskId=%s", task_id)
+            log.info("Completed taskId=%s status=%s", task_id, TranscriptionStatus.COMPLETED.value)
+            record_task_processed(TranscriptionStatus.COMPLETED.value)
             return TranscriptionResultEvent(
                 taskId=task_id,
                 status=TranscriptionStatus.COMPLETED,
@@ -167,6 +170,7 @@ def log_duration(stage: str, task_id) -> Iterator[None]:
         yield
     finally:
         duration_seconds = time.monotonic() - started_at
+        record_stage_duration(stage, duration_seconds)
         log.info(
             "Worker stage duration taskId=%s stage=%s durationSeconds=%.3f",
             task_id,

@@ -6,6 +6,7 @@ from pika.exceptions import AMQPError
 from app.config import get_settings
 from app.logging_config import configure_logging
 from app.messaging.rabbitmq import RabbitMqClient
+from app.observability import start_observability_server
 from app.processing.downloader import AudioDownloader
 from app.processing.exporter import TranscriptExporter
 from app.processing.processor import TranscriptionProcessor
@@ -20,6 +21,9 @@ def main() -> None:
 
     settings.results_base_path.mkdir(parents=True, exist_ok=True)
     settings.downloads_base_path.mkdir(parents=True, exist_ok=True)
+
+    if settings.worker_metrics_enabled:
+        start_observability_server(settings.worker_metrics_port)
 
     processor = TranscriptionProcessor(
         settings=settings,

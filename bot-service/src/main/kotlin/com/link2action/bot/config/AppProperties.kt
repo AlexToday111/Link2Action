@@ -18,11 +18,16 @@ class AppProperties (
     data class Rabbit(
         val exchange: String,
         val requestQueue: String,
+        val requestRetryQueue: String,
+        val requestDlq: String,
         val resultQueue: String,
         val requestRoutingKey: String,
+        val retryRoutingKey: String,
+        val dlqRoutingKey: String,
         val completedRoutingKey: String,
         val failedRoutingKey: String,
-        val progressRoutingKey: String
+        val progressRoutingKey: String,
+        val retryDelayMs: Int
     )
 
     data class Storage(
