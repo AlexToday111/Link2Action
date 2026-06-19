@@ -3,9 +3,11 @@ package com.link2action.bot.telegram
 import com.link2action.bot.artifact.ArtifactType
 import com.link2action.bot.artifact.TranscriptionTaskArtifactService
 import com.link2action.bot.common.UrlExtractor
+import com.link2action.bot.config.AppProperties
 import com.link2action.bot.storage.StorageCleanupService
 import com.link2action.bot.task.ActiveTaskLimitExceededException
 import com.link2action.bot.task.CreateTranscriptionTaskCommand
+import com.link2action.bot.task.TranscriptionSourceType
 import com.link2action.bot.task.TranscriptionStatus
 import com.link2action.bot.task.TranscriptionTask
 import com.link2action.bot.task.TranscriptionTaskService
@@ -16,17 +18,20 @@ import java.nio.file.Path
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 @Component
 class TelegramCommandRouter(
     private val taskService: TranscriptionTaskService,
     private val storageCleanupService: StorageCleanupService,
     private val artifactService: TranscriptionTaskArtifactService,
-    private val messageSender: TelegramMessageSender
+    private val messageSender: TelegramMessageSender,
+    private val appProperties: AppProperties
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
     private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm")
         .withZone(ZoneId.systemDefault())
+    private val batchSessions = ConcurrentHashMap<Long, BatchSession>()
 
     fun route(message: TelegramMessage) {
         val chatId = message.chat.id
@@ -41,24 +46,29 @@ class TelegramCommandRouter(
         }
 
         val text = message.text?.trim()
+        val mediaSource = extractTelegramMediaSource(message)
 
-        if (text.isNullOrBlank()) {
+        if (text.isNullOrBlank() && mediaSource == null) {
             messageSender.sendText(
                 chatId = chatId,
-                text = "Пока я умею работать только с текстовыми ссылками на видео."
+                text = "Пришли ссылку, видео, аудио или voice message."
             )
             return
         }
 
         try {
             when {
-                isCommand(text, "/start") -> showMainMenu(chatId)
-                isCommand(text, "/help") -> showHelp(chatId, null)
-                isCommand(text, "/history") -> showHistory(chatId, userId, null)
-                isCommand(text, "/clear") -> showClearStorageRequest(chatId, null)
-                isCommand(text, "/get") -> handleGetCommand(chatId, userId, text)
-                isCommand(text, "/status") -> handleStatus(chatId, userId, text)
-                UrlExtractor.extract(text) != null -> handleVideoUrl(chatId, userId, text)
+                isCommand(text.orEmpty(), "/start") -> showMainMenu(chatId)
+                isCommand(text.orEmpty(), "/help") -> showHelp(chatId, null)
+                isCommand(text.orEmpty(), "/history") -> showHistory(chatId, userId, null)
+                isCommand(text.orEmpty(), "/clear") -> showClearStorageRequest(chatId, null)
+                isCommand(text.orEmpty(), "/batch") -> startBatch(chatId, userId)
+                isCommand(text.orEmpty(), "/done") -> finishBatch(chatId, userId)
+                isCommand(text.orEmpty(), "/cancel") -> cancelBatch(chatId, userId)
+                isCommand(text.orEmpty(), "/get") -> handleGetCommand(chatId, userId, text.orEmpty())
+                isCommand(text.orEmpty(), "/status") -> handleStatus(chatId, userId, text.orEmpty())
+                !text.isNullOrBlank() && UrlExtractor.extract(text) != null -> handleVideoUrl(chatId, userId, text)
+                mediaSource != null -> handleTelegramMedia(chatId, userId, mediaSource)
                 else -> handleUnknownMessage(chatId)
             }
         } catch (ex: Exception) {
@@ -128,6 +138,7 @@ class TelegramCommandRouter(
                 data.startsWith("$CALLBACK_REPEAT_TASK:") -> handleRepeatTask(context, data)
                 data.startsWith("$CALLBACK_FORMAT_SELECT:") -> handleFormatSelect(context, data)
                 data.startsWith("$CALLBACK_FORMAT_CANCEL:") -> handleFormatCancel(context, data)
+                data.startsWith("$CALLBACK_BATCH_FORMAT_SELECT:") -> handleBatchFormatSelect(context, data)
                 else -> {
                     log.warn(
                         "Unsupported Telegram callback data: callbackQueryId={}, data={}",
@@ -399,13 +410,73 @@ class TelegramCommandRouter(
             return
         }
 
+        val source = PendingTranscriptionSource.url(url)
+        if (addToBatchIfActive(chatId, userId, source)) {
+            return
+        }
+
+        createWaitingTaskAndPrompt(
+            chatId = chatId,
+            userId = userId,
+            source = source,
+            receivedText = formatSelectionText(source)
+        )
+    }
+
+    private fun handleTelegramMedia(
+        chatId: Long,
+        userId: Long,
+        source: PendingTranscriptionSource
+    ) {
+        if (!source.supported) {
+            messageSender.sendText(
+                chatId = chatId,
+                text = unsupportedDocumentText()
+            )
+            return
+        }
+
+        if (source.fileSizeBytes == null) {
+            log.warn(
+                "Telegram media file size is unknown: userId={}, chatId={}, fileUniqueId={}",
+                userId,
+                chatId,
+                source.telegramFileUniqueId
+            )
+        } else if (source.fileSizeBytes > appProperties.telegram.maxUploadFileSizeBytes) {
+            messageSender.sendText(
+                chatId = chatId,
+                text = """
+                    Файл слишком большой для текущего режима бота.
+
+                    Максимальный размер: ${formatBytes(appProperties.telegram.maxUploadFileSizeBytes)}.
+                    Попробуй отправить ссылку на видео или файл меньшего размера.
+                """.trimIndent()
+            )
+            return
+        }
+
+        if (addToBatchIfActive(chatId, userId, source)) {
+            return
+        }
+
+        createWaitingTaskAndPrompt(
+            chatId = chatId,
+            userId = userId,
+            source = source,
+            receivedText = formatSelectionText(source)
+        )
+    }
+
+    private fun createWaitingTaskAndPrompt(
+        chatId: Long,
+        userId: Long,
+        source: PendingTranscriptionSource,
+        receivedText: String
+    ) {
         val taskId = try {
             taskService.createWaitingFormatTask(
-                CreateTranscriptionTaskCommand(
-                    telegramChatId = chatId,
-                    telegramUserId = userId,
-                    sourceUrl = url
-                )
+                source.toCommand(chatId, userId)
             )
         } catch (ex: ActiveTaskLimitExceededException) {
             messageSender.sendText(
@@ -417,7 +488,7 @@ class TelegramCommandRouter(
 
         val sent = messageSender.sendText(
             chatId = chatId,
-            text = formatSelectionText(),
+            text = receivedText,
             replyMarkup = formatSelectionKeyboard(taskId),
             disableWebPagePreview = true
         )
@@ -425,6 +496,134 @@ class TelegramCommandRouter(
         if (sent != null) {
             taskService.updateProgressMessageId(taskId, sent.messageId)
         }
+    }
+
+    private fun startBatch(
+        chatId: Long,
+        userId: Long
+    ) {
+        batchSessions[userId] = BatchSession()
+        messageSender.sendText(
+            chatId = chatId,
+            text = """
+                Batch mode включён.
+                Отправляй ссылки, видео, аудио или voice messages.
+                Когда закончишь — нажми /done.
+                Для отмены — /cancel.
+            """.trimIndent()
+        )
+    }
+
+    private fun finishBatch(
+        chatId: Long,
+        userId: Long
+    ) {
+        val session = batchSessions[userId]
+        if (session == null || session.sources.isEmpty()) {
+            messageSender.sendText(
+                chatId = chatId,
+                text = "Batch пуст. Пришли источники после /batch или нажми /cancel."
+            )
+            return
+        }
+
+        messageSender.sendText(
+            chatId = chatId,
+            text = """
+                Я получил ${session.sources.size} источников.
+
+                Выбери формат для всех:
+            """.trimIndent(),
+            replyMarkup = batchFormatSelectionKeyboard()
+        )
+    }
+
+    private fun cancelBatch(
+        chatId: Long,
+        userId: Long
+    ) {
+        val removed = batchSessions.remove(userId)
+        messageSender.sendText(
+            chatId = chatId,
+            text = if (removed == null) "Активного batch нет." else "Batch отменён."
+        )
+    }
+
+    private fun addToBatchIfActive(
+        chatId: Long,
+        userId: Long,
+        source: PendingTranscriptionSource
+    ): Boolean {
+        val session = batchSessions[userId] ?: return false
+        val maxBatchSize = appProperties.transcription.maxBatchSize.coerceAtLeast(1)
+
+        if (session.sources.size >= maxBatchSize) {
+            messageSender.sendText(
+                chatId = chatId,
+                text = """
+                    В одном batch можно добавить максимум $maxBatchSize источников.
+                    Запусти текущий batch через /done или отмени через /cancel.
+                """.trimIndent()
+            )
+            return true
+        }
+
+        session.sources.add(source)
+        messageSender.sendText(
+            chatId = chatId,
+            text = "Добавлено в batch: ${session.sources.size}"
+        )
+        return true
+    }
+
+    private fun handleBatchFormatSelect(
+        context: CallbackContext,
+        data: String
+    ) {
+        val userId = context.userId
+        if (userId == null) {
+            render(context, "Batch не найден.", menuOnlyKeyboard())
+            return
+        }
+
+        val session = batchSessions.remove(userId)
+        if (session == null || session.sources.isEmpty()) {
+            render(context, "Batch не найден или уже запущен.", menuOnlyKeyboard())
+            return
+        }
+
+        val formats = formatsFromSelection(data.substringAfter(":", "BOTH"))
+        var createdCount = 0
+
+        session.sources.forEach { source ->
+            val taskId = try {
+                taskService.createTask(
+                    source.toCommand(
+                        chatId = context.chatId,
+                        userId = userId,
+                        requestedFormats = formats.toSet()
+                    ),
+                    enforceActiveTaskLimit = false
+                )
+            } catch (ex: ActiveTaskLimitExceededException) {
+                log.warn("Active task limit reached while creating batch task userId={}", userId)
+                null
+            }
+
+            if (taskId != null) {
+                createdCount += 1
+            }
+        }
+
+        render(
+            context = context,
+            text = """
+                Создано $createdCount задач.
+                Я пришлю результаты по мере готовности.
+            """.trimIndent(),
+            replyMarkup = acceptedTaskKeyboard(),
+            disableWebPagePreview = true
+        )
     }
 
     private fun handleFormatSelect(
@@ -832,10 +1031,12 @@ class TelegramCommandRouter(
         return """
             Привет. Я Link2Action.
 
-            Пришли ссылку на видео, а я сделаю расшифровку и отправлю результат в выбранном формате.
+            Пришли ссылку на видео, загрузи видео или аудио, либо отправь voice message.
 
             Что можно сделать:
             — отправить ссылку на видео;
+            — загрузить видео, аудио или voice;
+            — собрать несколько источников через /batch;
             — посмотреть историю задач;
             — скачать старый результат;
             — очистить свои файлы.
@@ -843,10 +1044,149 @@ class TelegramCommandRouter(
     }
 
     private fun formatSelectionText(): String {
-        return """
-            Ссылка получена.
+        return formatSelectionText(null)
+    }
 
-            Выбери формат результата:
+    private fun formatSelectionText(source: PendingTranscriptionSource?): String {
+        if (source == null || source.sourceType == TranscriptionSourceType.URL) {
+            return """
+                Ссылка получена.
+
+                Выбери формат результата:
+            """.trimIndent()
+        }
+
+        val lines = mutableListOf(
+            source.receivedTitle,
+            ""
+        )
+
+        source.originalFileName
+            ?.takeIf { it.isNotBlank() }
+            ?.let { lines.add("Файл: $it") }
+
+        source.fileSizeBytes
+            ?.let { lines.add("Размер: ${formatBytes(it)}") }
+
+        if (lines.lastOrNull()?.isNotBlank() == true) {
+            lines.add("")
+        }
+
+        lines.add("Что сделать?")
+
+        return lines.joinToString("\n")
+    }
+
+    private fun buildTaskSourceLine(task: TranscriptionTask): String {
+        return when (task.sourceType) {
+            TranscriptionSourceType.URL -> "Ссылка: ${task.sourceUrl.orEmpty()}"
+            TranscriptionSourceType.TELEGRAM_FILE -> {
+                val label = task.originalFileName
+                    ?.takeIf { it.isNotBlank() }
+                    ?: task.mimeType
+                    ?: "Telegram file"
+                "Источник: $label"
+            }
+        }
+    }
+
+    private fun extractTelegramMediaSource(message: TelegramMessage): PendingTranscriptionSource? {
+        message.video?.let {
+            return PendingTranscriptionSource.telegramFile(
+                fileId = it.fileId,
+                fileUniqueId = it.fileUniqueId,
+                originalFileName = it.fileName ?: "video.mp4",
+                mimeType = it.mimeType ?: "video/mp4",
+                fileSizeBytes = it.fileSize,
+                receivedTitle = "🎬 Видео получено"
+            )
+        }
+
+        message.audio?.let {
+            return PendingTranscriptionSource.telegramFile(
+                fileId = it.fileId,
+                fileUniqueId = it.fileUniqueId,
+                originalFileName = it.fileName ?: "audio",
+                mimeType = it.mimeType,
+                fileSizeBytes = it.fileSize,
+                receivedTitle = "🎧 Аудио получено"
+            )
+        }
+
+        message.voice?.let {
+            return PendingTranscriptionSource.telegramFile(
+                fileId = it.fileId,
+                fileUniqueId = it.fileUniqueId,
+                originalFileName = "voice.ogg",
+                mimeType = it.mimeType ?: "audio/ogg",
+                fileSizeBytes = it.fileSize,
+                receivedTitle = "🎙 Голосовое сообщение получено"
+            )
+        }
+
+        message.videoNote?.let {
+            return PendingTranscriptionSource.telegramFile(
+                fileId = it.fileId,
+                fileUniqueId = it.fileUniqueId,
+                originalFileName = "video_note.mp4",
+                mimeType = "video/mp4",
+                fileSizeBytes = it.fileSize,
+                receivedTitle = "🎬 Видео получено"
+            )
+        }
+
+        message.document?.let {
+            if (!isSupportedDocument(it)) {
+                return UnsupportedTelegramDocumentSource
+            }
+
+            return PendingTranscriptionSource.telegramFile(
+                fileId = it.fileId,
+                fileUniqueId = it.fileUniqueId,
+                originalFileName = it.fileName,
+                mimeType = it.mimeType,
+                fileSizeBytes = it.fileSize,
+                receivedTitle = if (it.mimeType?.startsWith("audio/") == true) {
+                    "🎧 Аудио получено"
+                } else {
+                    "🎬 Видео получено"
+                }
+            )
+        }
+
+        return null
+    }
+
+    private fun isSupportedDocument(document: TelegramDocument): Boolean {
+        val mimeType = document.mimeType?.lowercase().orEmpty()
+        if (mimeType.startsWith("video/") || mimeType.startsWith("audio/")) {
+            return true
+        }
+
+        val fileName = document.fileName?.lowercase().orEmpty()
+        return fileName.endsWith(".mp4") ||
+                fileName.endsWith(".mov") ||
+                fileName.endsWith(".mkv") ||
+                fileName.endsWith(".webm") ||
+                fileName.endsWith(".mp3") ||
+                fileName.endsWith(".m4a") ||
+                fileName.endsWith(".wav") ||
+                fileName.endsWith(".ogg") ||
+                fileName.endsWith(".opus")
+    }
+
+    private fun formatBytes(bytes: Long): String {
+        val mb = bytes.toDouble() / (1024 * 1024)
+        return if (mb >= 1) {
+            "%.1f MB".format(mb)
+        } else {
+            "${bytes / 1024} KB"
+        }
+    }
+
+    private fun unsupportedDocumentText(): String {
+        return """
+            Этот тип файла пока не поддерживается. Пришли видео, аудио, voice message или ссылку.
         """.trimIndent()
     }
 
@@ -855,7 +1195,7 @@ class TelegramCommandRouter(
             "Статус задачи: ${task.status}",
             "",
             "ID: ${task.id}",
-            "Ссылка: ${task.sourceUrl}",
+            buildTaskSourceLine(task),
             "Создана: ${task.createdAt}",
             "Обновлена: ${task.updatedAt}"
         )
@@ -887,7 +1227,7 @@ class TelegramCommandRouter(
         task.title
             ?.takeIf { it.isNotBlank() }
             ?.let { lines.add("Видео: $it") }
-            ?: lines.add("Ссылка: ${task.sourceUrl}")
+            ?: lines.add(buildTaskSourceLine(task))
 
         task.durationSeconds
             ?.let { lines.add("Длительность: ${formatDuration(it)}") }
@@ -934,7 +1274,7 @@ class TelegramCommandRouter(
             task.title
                 ?.takeIf { it.isNotBlank() }
                 ?.let { lines.add("Название: $it") }
-                ?: lines.add("Ссылка: ${task.sourceUrl}")
+                ?: lines.add(buildTaskSourceLine(task))
             lines.add("ID: ${shortTaskId(task.id).removeSuffix("...")}")
             task.durationSeconds
                 ?.let { lines.add("Длительность: ${formatDuration(it)}") }
@@ -1037,6 +1377,17 @@ class TelegramCommandRouter(
         )
     }
 
+    private fun batchFormatSelectionKeyboard(): Map<String, Any> {
+        return inlineKeyboard(
+            listOf(
+                button("📄 TXT", "$CALLBACK_BATCH_FORMAT_SELECT:TXT"),
+                button("📝 Markdown", "$CALLBACK_BATCH_FORMAT_SELECT:MD")
+            ),
+            listOf(button("📄 + 📝 Оба", "$CALLBACK_BATCH_FORMAT_SELECT:BOTH")),
+            listOf(button("🏠 Меню", CALLBACK_MENU))
+        )
+    }
+
     private fun acceptedTaskKeyboard(): Map<String, Any> {
         return inlineKeyboard(
             listOf(button("🔄 Статус", CALLBACK_STATUS_ACTIVE)),
@@ -1128,7 +1479,12 @@ class TelegramCommandRouter(
         return when {
             !task.title.isNullOrBlank() -> task.title!!
             task.status == TranscriptionStatus.FAILED && !task.errorMessage.isNullOrBlank() -> task.errorMessage!!
-            else -> task.sourceUrl
+            else -> when (task.sourceType) {
+                TranscriptionSourceType.URL -> task.sourceUrl.orEmpty()
+                TranscriptionSourceType.TELEGRAM_FILE -> task.originalFileName
+                    ?: task.mimeType
+                    ?: "Telegram file"
+            }
         }
     }
 
@@ -1362,6 +1718,70 @@ class TelegramCommandRouter(
         val hasAny: Boolean = hasTxt || hasMd
     }
 
+    private data class PendingTranscriptionSource(
+        val sourceType: TranscriptionSourceType,
+        val sourceUrl: String? = null,
+        val telegramFileId: String? = null,
+        val telegramFileUniqueId: String? = null,
+        val originalFileName: String? = null,
+        val mimeType: String? = null,
+        val fileSizeBytes: Long? = null,
+        val receivedTitle: String = "Источник получен",
+        val supported: Boolean = true
+    ) {
+        fun toCommand(
+            chatId: Long,
+            userId: Long,
+            requestedFormats: Set<String> = setOf("TXT", "MD")
+        ): CreateTranscriptionTaskCommand {
+            return CreateTranscriptionTaskCommand(
+                telegramChatId = chatId,
+                telegramUserId = userId,
+                sourceType = sourceType,
+                sourceUrl = sourceUrl,
+                telegramFileId = telegramFileId,
+                telegramFileUniqueId = telegramFileUniqueId,
+                originalFileName = originalFileName,
+                mimeType = mimeType,
+                fileSizeBytes = fileSizeBytes,
+                requestedFormats = requestedFormats
+            )
+        }
+
+        companion object {
+            fun url(sourceUrl: String): PendingTranscriptionSource {
+                return PendingTranscriptionSource(
+                    sourceType = TranscriptionSourceType.URL,
+                    sourceUrl = sourceUrl,
+                    receivedTitle = "Ссылка получена"
+                )
+            }
+
+            fun telegramFile(
+                fileId: String,
+                fileUniqueId: String?,
+                originalFileName: String?,
+                mimeType: String?,
+                fileSizeBytes: Long?,
+                receivedTitle: String
+            ): PendingTranscriptionSource {
+                return PendingTranscriptionSource(
+                    sourceType = TranscriptionSourceType.TELEGRAM_FILE,
+                    telegramFileId = fileId,
+                    telegramFileUniqueId = fileUniqueId,
+                    originalFileName = originalFileName,
+                    mimeType = mimeType,
+                    fileSizeBytes = fileSizeBytes,
+                    receivedTitle = receivedTitle
+                )
+            }
+        }
+    }
+
+    private data class BatchSession(
+        val sources: MutableList<PendingTranscriptionSource> = mutableListOf()
+    )
+
     private enum class ResultFileType {
         ALL,
         TXT,
@@ -1397,6 +1817,12 @@ class TelegramCommandRouter(
         const val CALLBACK_REPEAT_TASK = "repeat_task"
         const val CALLBACK_FORMAT_SELECT = "format_select"
         const val CALLBACK_FORMAT_CANCEL = "format_cancel"
+        const val CALLBACK_BATCH_FORMAT_SELECT = "batch_format_select"
         const val CAPTION_TITLE_LIMIT = 120
+
+        val UnsupportedTelegramDocumentSource = PendingTranscriptionSource(
+            sourceType = TranscriptionSourceType.TELEGRAM_FILE,
+            supported = false
+        )
     }
 }

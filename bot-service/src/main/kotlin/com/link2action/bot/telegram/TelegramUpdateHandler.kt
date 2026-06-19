@@ -94,7 +94,18 @@ data class TelegramMessage(
 
     val from: TelegramUser? = null,
 
-    val text: String? = null
+    val text: String? = null,
+
+    val video: TelegramVideo? = null,
+
+    val document: TelegramDocument? = null,
+
+    val audio: TelegramAudio? = null,
+
+    val voice: TelegramVoice? = null,
+
+    @JsonProperty("video_note")
+    val videoNote: TelegramVideoNote? = null
 )
 
 @JsonIgnoreProperties(ignoreUnknown = true)
@@ -114,4 +125,85 @@ data class TelegramUser(
     val firstName: String? = null,
 
     val username: String? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class TelegramVideo(
+    @JsonProperty("file_id")
+    val fileId: String,
+
+    @JsonProperty("file_unique_id")
+    val fileUniqueId: String? = null,
+
+    @JsonProperty("file_name")
+    val fileName: String? = null,
+
+    @JsonProperty("mime_type")
+    val mimeType: String? = null,
+
+    @JsonProperty("file_size")
+    val fileSize: Long? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class TelegramDocument(
+    @JsonProperty("file_id")
+    val fileId: String,
+
+    @JsonProperty("file_unique_id")
+    val fileUniqueId: String? = null,
+
+    @JsonProperty("file_name")
+    val fileName: String? = null,
+
+    @JsonProperty("mime_type")
+    val mimeType: String? = null,
+
+    @JsonProperty("file_size")
+    val fileSize: Long? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class TelegramAudio(
+    @JsonProperty("file_id")
+    val fileId: String,
+
+    @JsonProperty("file_unique_id")
+    val fileUniqueId: String? = null,
+
+    @JsonProperty("file_name")
+    val fileName: String? = null,
+
+    @JsonProperty("mime_type")
+    val mimeType: String? = null,
+
+    @JsonProperty("file_size")
+    val fileSize: Long? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class TelegramVoice(
+    @JsonProperty("file_id")
+    val fileId: String,
+
+    @JsonProperty("file_unique_id")
+    val fileUniqueId: String? = null,
+
+    @JsonProperty("mime_type")
+    val mimeType: String? = null,
+
+    @JsonProperty("file_size")
+    val fileSize: Long? = null
+)
+
+@JsonIgnoreProperties(ignoreUnknown = true)
+data class TelegramVideoNote(
+    @JsonProperty("file_id")
+    val fileId: String,
+
+    @JsonProperty("file_unique_id")
+    val fileUniqueId: String? = null,
+
+    @JsonProperty("file_size")
+    val fileSize: Long? = null
 )
