@@ -59,3 +59,57 @@ Worker observability settings:
 | --- | --- |
 | `WORKER_METRICS_ENABLED` | `true` |
 | `WORKER_METRICS_PORT` | `9091` |
+
+## Development checks
+
+Run bot-service tests:
+
+```bash
+cd bot-service
+./gradlew clean test
+```
+
+Run worker-service tests:
+
+```bash
+cd worker-service
+pytest
+```
+
+Validate and build Docker Compose:
+
+```bash
+docker compose config
+docker compose build
+```
+
+## Docker notes
+
+Local development uses `docker-compose.yml` and keeps PostgreSQL, RabbitMQ AMQP, RabbitMQ
+management, bot-service, and worker metrics ports published for convenient debugging.
+
+Copy `.env.example` to `.env` and set at least `TELEGRAM_BOT_TOKEN` before running:
+
+```bash
+docker compose up --build
+```
+
+For a more production-oriented local shape, layer the production override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up --build
+```
+
+The production override removes the PostgreSQL host port, keeps RabbitMQ management private,
+adds restart policies, and applies basic log rotation. Service images run application processes as
+non-root users.
+
+## CI
+
+GitHub Actions runs on pushes and pull requests to `main`.
+
+Jobs:
+
+- `bot-service tests`: Java 21, Gradle cache, `./gradlew clean test`.
+- `worker-service tests`: Python 3.11, pip cache, `pip install -r requirements.txt`, `pytest`.
+- `docker compose`: `docker compose config` and `docker compose build`.
