@@ -13,10 +13,14 @@ WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends wget \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system app \
+    && useradd --system --gid app --home-dir /app --shell /usr/sbin/nologin app
 
-COPY --from=build /app/build/libs/link2action-bot-service.jar app.jar
+COPY --from=build --chown=app:app /app/build/libs/link2action-bot-service.jar app.jar
 
 EXPOSE 8080
+
+USER app
 
 ENTRYPOINT ["java", "-jar", "app.jar"]
