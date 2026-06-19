@@ -1,6 +1,7 @@
 package com.link2action.bot.integration
 
 import com.link2action.bot.task.CreateTranscriptionTaskCommand
+import com.link2action.bot.task.TranscriptionSourceType
 import com.link2action.bot.task.TranscriptionTaskRepository
 import com.link2action.bot.task.TranscriptionTaskService
 import org.junit.jupiter.api.Test
@@ -65,6 +66,16 @@ class TranscriptionTaskIdempotencyIntegrationTest : IntegrationTestBase() {
         }
     }
 
+    @Test
+    fun `telegram file idempotency uses file unique id`() {
+        val first = taskService.createTask(telegramFileCommand(fileUniqueId = "unique-a"))
+        val duplicate = taskService.createTask(telegramFileCommand(fileUniqueId = "unique-a"))
+        val differentFile = taskService.createTask(telegramFileCommand(fileUniqueId = "unique-b"))
+
+        assertEquals(first, duplicate)
+        assertNotEquals(first, differentFile)
+    }
+
     private fun command(
         sourceUrl: String,
         language: String?,
@@ -76,6 +87,19 @@ class TranscriptionTaskIdempotencyIntegrationTest : IntegrationTestBase() {
             sourceUrl = sourceUrl,
             language = language,
             requestedFormats = requestedFormats
+        )
+    }
+
+    private fun telegramFileCommand(fileUniqueId: String): CreateTranscriptionTaskCommand {
+        return CreateTranscriptionTaskCommand(
+            telegramChatId = 3001,
+            telegramUserId = 4001,
+            sourceType = TranscriptionSourceType.TELEGRAM_FILE,
+            telegramFileId = "file-id-$fileUniqueId-${System.nanoTime()}",
+            telegramFileUniqueId = fileUniqueId,
+            originalFileName = "lecture.mp4",
+            mimeType = "video/mp4",
+            requestedFormats = setOf("TXT")
         )
     }
 }

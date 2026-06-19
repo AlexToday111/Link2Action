@@ -12,7 +12,8 @@ class AppProperties (
     data class Telegram (
         val botToken: String,
         val botUsername: String,
-        val pollingDelayMs: Long = 1000
+        val pollingDelayMs: Long = 1000,
+        val maxUploadFileSizeBytes: Long = 20 * 1024 * 1024
     )
 
     data class Rabbit(
@@ -35,6 +36,7 @@ class AppProperties (
     )
 
     data class Transcription (
-        val maxActiveTasksPerUser: Int = 1
+        val maxActiveTasksPerUser: Int = 1,
+        val maxBatchSize: Int = 5
     )
 }

@@ -42,6 +42,7 @@ app:
     bot-token: ${TELEGRAM_BOT_TOKEN}
     bot-username: ${TELEGRAM_BOT_USERNAME:Link2ActionBot}
     polling-delay-ms: ${TELEGRAM_POLLING_DELAY_MS:1000}
+    max-upload-file-size-bytes: ${TELEGRAM_MAX_UPLOAD_FILE_SIZE_BYTES:20971520}
 
   rabbit:
     exchange: linkscribe.exchange
@@ -62,6 +63,7 @@ app:
 
   transcription:
     max-active-tasks-per-user: ${MAX_ACTIVE_TASKS_PER_USER:1}
+    max-batch-size: ${MAX_BATCH_SIZE:5}
 
 logging:
   level:

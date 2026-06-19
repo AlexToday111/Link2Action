@@ -6,6 +6,7 @@ import com.link2action.bot.queue.TranscriptionRequestedEvent
 import com.link2action.bot.queue.TranscriptionResultEvent
 import com.link2action.bot.queue.TranscriptionResultStatus
 import com.link2action.bot.task.CreateTranscriptionTaskCommand
+import com.link2action.bot.task.TranscriptionSourceType
 import com.link2action.bot.task.TranscriptionStatus
 import com.link2action.bot.task.TranscriptionTaskRepository
 import com.link2action.bot.task.TranscriptionTaskService
@@ -58,10 +59,43 @@ class RabbitMqIntegrationTest : IntegrationTestBase() {
         assertNotNull(message)
         val event = objectMapper.readValue(message.body, TranscriptionRequestedEvent::class.java)
         assertEquals(taskId, event.taskId)
-        assertTrue(event.sourceUrl.startsWith("https://youtu.be/rabbit-publish-"))
+        assertEquals(TranscriptionSourceType.URL, event.sourceType)
+        assertTrue(event.sourceUrl.orEmpty().startsWith("https://youtu.be/rabbit-publish-"))
         assertEquals("en", event.language)
         assertEquals(listOf("TXT", "MD"), event.formats)
         assertNotNull(event.createdAt)
+    }
+
+    @Test
+    fun `creating telegram file task publishes source metadata to rabbitmq`() {
+        purgeQueue(appProperties.rabbit.requestQueue)
+
+        val taskId = taskService.createTask(
+            CreateTranscriptionTaskCommand(
+                telegramChatId = 5101,
+                telegramUserId = 6101,
+                sourceType = TranscriptionSourceType.TELEGRAM_FILE,
+                telegramFileId = "telegram-file-id-${System.nanoTime()}",
+                telegramFileUniqueId = "telegram-file-unique-id",
+                originalFileName = "lecture.mp4",
+                mimeType = "video/mp4",
+                fileSizeBytes = 18_400_000,
+                language = null,
+                requestedFormats = setOf("TXT", "MD")
+            )
+        )
+
+        val message = rabbitTemplate.receive(appProperties.rabbit.requestQueue, 5000)
+
+        assertNotNull(message)
+        val event = objectMapper.readValue(message.body, TranscriptionRequestedEvent::class.java)
+        assertEquals(taskId, event.taskId)
+        assertEquals(TranscriptionSourceType.TELEGRAM_FILE, event.sourceType)
+        assertEquals(null, event.sourceUrl)
+        assertEquals("telegram-file-unique-id", event.telegramFileUniqueId)
+        assertEquals("lecture.mp4", event.originalFileName)
+        assertEquals("video/mp4", event.mimeType)
+        assertEquals(18_400_000, event.fileSizeBytes)
     }
 
     @Test

@@ -30,6 +30,7 @@ class TranscriptionTaskService(
 
     @Transactional
     fun createWaitingFormatTask(command: CreateTranscriptionTaskCommand): UUID {
+        validateSource(command)
         validateActiveTaskLimit(command.telegramUserId)
 
         val now = clockProvider.now()
@@ -39,7 +40,13 @@ class TranscriptionTaskService(
             id = taskId,
             telegramChatId = command.telegramChatId,
             telegramUserId = command.telegramUserId,
-            sourceUrl = command.sourceUrl,
+            sourceType = command.sourceType,
+            sourceUrl = normalizedSourceUrl(command),
+            telegramFileId = command.telegramFileId?.trim(),
+            telegramFileUniqueId = command.telegramFileUniqueId?.trim(),
+            originalFileName = command.originalFileName?.trim(),
+            mimeType = command.mimeType?.trim(),
+            fileSizeBytes = command.fileSizeBytes,
             status = TranscriptionStatus.WAITING_FORMAT,
             requestedFormat = "PENDING",
             language = command.language,
@@ -61,11 +68,18 @@ class TranscriptionTaskService(
     }
 
     @Transactional
-    fun createTask(command: CreateTranscriptionTaskCommand): UUID {
+    fun createTask(
+        command: CreateTranscriptionTaskCommand,
+        enforceActiveTaskLimit: Boolean = true
+    ): UUID {
+        validateSource(command)
         val formats = normalizeFormats(command.requestedFormats)
         val idempotencyKey = buildIdempotencyKey(
             telegramUserId = command.telegramUserId,
-            sourceUrl = command.sourceUrl,
+            sourceType = command.sourceType,
+            sourceUrl = normalizedSourceUrl(command),
+            telegramFileUniqueId = command.telegramFileUniqueId,
+            telegramFileId = command.telegramFileId,
             requestedFormat = formats.joinToString(","),
             language = command.language
         )
@@ -81,7 +95,9 @@ class TranscriptionTaskService(
             return existingTask.id
         }
 
-        validateActiveTaskLimit(command.telegramUserId)
+        if (enforceActiveTaskLimit) {
+            validateActiveTaskLimit(command.telegramUserId)
+        }
 
         val now = clockProvider.now()
         val taskId = UUID.randomUUID()
@@ -90,7 +106,13 @@ class TranscriptionTaskService(
             id = taskId,
             telegramChatId = command.telegramChatId,
             telegramUserId = command.telegramUserId,
-            sourceUrl = command.sourceUrl,
+            sourceType = command.sourceType,
+            sourceUrl = normalizedSourceUrl(command),
+            telegramFileId = command.telegramFileId?.trim(),
+            telegramFileUniqueId = command.telegramFileUniqueId?.trim(),
+            originalFileName = command.originalFileName?.trim(),
+            mimeType = command.mimeType?.trim(),
+            fileSizeBytes = command.fileSizeBytes,
             status = TranscriptionStatus.QUEUED,
             requestedFormat = formats.joinToString(","),
             language = command.language,
@@ -104,7 +126,13 @@ class TranscriptionTaskService(
 
         val event = TranscriptionRequestedEvent(
             taskId = task.id,
+            sourceType = task.sourceType,
             sourceUrl = task.sourceUrl,
+            telegramFileId = task.telegramFileId,
+            telegramFileUniqueId = task.telegramFileUniqueId,
+            originalFileName = task.originalFileName,
+            mimeType = task.mimeType,
+            fileSizeBytes = task.fileSizeBytes,
             language = task.language,
             formats = formats,
             createdAt = task.createdAt
@@ -144,7 +172,10 @@ class TranscriptionTaskService(
         val formats = normalizeFormats(requestedFormats)
         val idempotencyKey = buildIdempotencyKey(
             telegramUserId = task.telegramUserId,
+            sourceType = task.sourceType,
             sourceUrl = task.sourceUrl,
+            telegramFileUniqueId = task.telegramFileUniqueId,
+            telegramFileId = task.telegramFileId,
             requestedFormat = formats.joinToString(","),
             language = task.language
         )
@@ -291,7 +322,13 @@ class TranscriptionTaskService(
             CreateTranscriptionTaskCommand(
                 telegramChatId = telegramChatId,
                 telegramUserId = telegramUserId,
+                sourceType = sourceTask.sourceType,
                 sourceUrl = sourceTask.sourceUrl,
+                telegramFileId = sourceTask.telegramFileId,
+                telegramFileUniqueId = sourceTask.telegramFileUniqueId,
+                originalFileName = sourceTask.originalFileName,
+                mimeType = sourceTask.mimeType,
+                fileSizeBytes = sourceTask.fileSizeBytes,
                 language = sourceTask.language
             )
         )
@@ -473,7 +510,13 @@ class TranscriptionTaskService(
     ) {
         val event = TranscriptionRequestedEvent(
             taskId = task.id,
+            sourceType = task.sourceType,
             sourceUrl = task.sourceUrl,
+            telegramFileId = task.telegramFileId,
+            telegramFileUniqueId = task.telegramFileUniqueId,
+            originalFileName = task.originalFileName,
+            mimeType = task.mimeType,
+            fileSizeBytes = task.fileSizeBytes,
             language = task.language,
             formats = requestedFormats.toList(),
             createdAt = task.createdAt
@@ -512,13 +555,24 @@ class TranscriptionTaskService(
 
     private fun buildIdempotencyKey(
         telegramUserId: Long,
-        sourceUrl: String,
+        sourceType: TranscriptionSourceType,
+        sourceUrl: String?,
+        telegramFileUniqueId: String?,
+        telegramFileId: String?,
         requestedFormat: String,
         language: String?
     ): String {
+        val sourceIdentity = when (sourceType) {
+            TranscriptionSourceType.URL -> sourceUrl?.trim().orEmpty()
+            TranscriptionSourceType.TELEGRAM_FILE -> telegramFileUniqueId
+                ?.trim()
+                ?.takeIf { it.isNotBlank() }
+                ?: telegramFileId?.trim().orEmpty()
+        }
         val rawKey = listOf(
             telegramUserId.toString(),
-            sourceUrl.trim(),
+            sourceType.name,
+            sourceIdentity,
             requestedFormat.trim().uppercase(),
             language?.trim()?.lowercase().orEmpty()
         ).joinToString("|")
@@ -534,6 +588,28 @@ class TranscriptionTaskService(
             .orElseThrow {
                 TranscriptionTaskNotFoundException("Transcription task not found: $taskId")
             }
+    }
+
+    private fun validateSource(command: CreateTranscriptionTaskCommand) {
+        when (command.sourceType) {
+            TranscriptionSourceType.URL -> {
+                require(!command.sourceUrl.isNullOrBlank()) {
+                    "sourceUrl is required for URL transcription source"
+                }
+            }
+
+            TranscriptionSourceType.TELEGRAM_FILE -> {
+                require(!command.telegramFileId.isNullOrBlank()) {
+                    "telegramFileId is required for Telegram file transcription source"
+                }
+            }
+        }
+    }
+
+    private fun normalizedSourceUrl(command: CreateTranscriptionTaskCommand): String? {
+        return command.sourceUrl
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
     }
 }
 

@@ -23,8 +23,27 @@ open class TranscriptionTask(
     @Column(name = "telegram_user_id", nullable = false)
     open val telegramUserId: Long,
 
-    @Column(name = "source_url", nullable = false, columnDefinition = "text")
-    open val sourceUrl: String,
+    @Enumerated(EnumType.STRING)
+    @Column(name = "source_type", nullable = false, length = 32)
+    open val sourceType: TranscriptionSourceType = TranscriptionSourceType.URL,
+
+    @Column(name = "source_url", columnDefinition = "text")
+    open val sourceUrl: String? = null,
+
+    @Column(name = "telegram_file_id", columnDefinition = "text")
+    open val telegramFileId: String? = null,
+
+    @Column(name = "telegram_file_unique_id", columnDefinition = "text")
+    open val telegramFileUniqueId: String? = null,
+
+    @Column(name = "original_file_name", columnDefinition = "text")
+    open val originalFileName: String? = null,
+
+    @Column(name = "mime_type", columnDefinition = "text")
+    open val mimeType: String? = null,
+
+    @Column(name = "file_size_bytes")
+    open val fileSizeBytes: Long? = null,
 
     @Enumerated(EnumType.STRING)
     @Column(name = "status", nullable = false, length = 32)
