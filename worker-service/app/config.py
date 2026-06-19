@@ -90,6 +90,20 @@ class Settings(BaseSettings):
     worker_metrics_enabled: bool = Field(True, validation_alias="WORKER_METRICS_ENABLED")
     worker_metrics_port: int = Field(9091, validation_alias="WORKER_METRICS_PORT")
 
+    telegram_bot_token: str | None = Field(None, validation_alias="TELEGRAM_BOT_TOKEN")
+    telegram_api_base_url: str = Field(
+        "https://api.telegram.org",
+        validation_alias="TELEGRAM_API_BASE_URL",
+    )
+    telegram_file_download_base_url: str = Field(
+        "https://api.telegram.org/file",
+        validation_alias="TELEGRAM_FILE_DOWNLOAD_BASE_URL",
+    )
+    telegram_file_download_timeout_seconds: int = Field(
+        60,
+        validation_alias="TELEGRAM_FILE_DOWNLOAD_TIMEOUT_SECONDS",
+    )
+
     @property
     def default_language(self) -> str | None:
         if self.whisper_language is None:

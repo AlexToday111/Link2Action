@@ -7,7 +7,7 @@ from app.config import get_settings
 from app.logging_config import configure_logging
 from app.messaging.rabbitmq import RabbitMqClient
 from app.observability import start_observability_server
-from app.processing.downloader import AudioDownloader
+from app.processing.downloader import AudioDownloader, SourceDownloader, TelegramFileDownloader
 from app.processing.exporter import TranscriptExporter
 from app.processing.processor import TranscriptionProcessor
 from app.processing.transcriber import WhisperTranscriber
@@ -27,9 +27,12 @@ def main() -> None:
 
     processor = TranscriptionProcessor(
         settings=settings,
-        downloader=AudioDownloader(
-            downloads_base_path=settings.downloads_base_path,
-            max_duration_seconds=settings.max_video_duration_seconds,
+        downloader=SourceDownloader(
+            url_downloader=AudioDownloader(
+                downloads_base_path=settings.downloads_base_path,
+                max_duration_seconds=settings.max_video_duration_seconds,
+            ),
+            telegram_downloader=TelegramFileDownloader(settings),
         ),
         transcriber=WhisperTranscriber(
             model_name=settings.whisper_model,

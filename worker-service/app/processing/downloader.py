@@ -1,9 +1,15 @@
 import logging
+import json
+import mimetypes
 import shutil
+import subprocess
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
+from app.config import Settings
+from app.messaging.events import SourceType, TranscriptionRequestedEvent
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 
@@ -119,3 +125,134 @@ class AudioDownloader:
             return None
 
         return sorted(candidates)[0]
+
+
+class SourceDownloader:
+    def __init__(
+        self,
+        url_downloader: AudioDownloader,
+        telegram_downloader: "TelegramFileDownloader",
+    ):
+        self._url_downloader = url_downloader
+        self._telegram_downloader = telegram_downloader
+
+    def download(self, event: TranscriptionRequestedEvent) -> DownloadedAudio:
+        if event.source_type == SourceType.URL:
+            return self._url_downloader.download(event.task_id, event.source_url or "")
+
+        if event.source_type == SourceType.TELEGRAM_FILE:
+            return self._telegram_downloader.download(event)
+
+        raise ValueError(f"Unsupported source type: {event.source_type}")
+
+    def cleanup(self, task_id: UUID) -> None:
+        self._url_downloader.cleanup(task_id)
+
+
+class TelegramFileDownloader:
+    def __init__(self, settings: Settings):
+        self._settings = settings
+
+    def download(self, event: TranscriptionRequestedEvent) -> DownloadedAudio:
+        if not self._settings.telegram_bot_token:
+            raise RuntimeError("Telegram bot token is required to download uploaded media")
+
+        task_dir = self.task_download_dir(event.task_id)
+        task_dir.mkdir(parents=True, exist_ok=True)
+
+        file_path = self.get_file_path(event.telegram_file_id or "")
+        source_path = self.download_file(
+            task_dir=task_dir,
+            file_path=file_path,
+            original_file_name=event.original_file_name,
+            mime_type=event.mime_type,
+        )
+        audio_path = task_dir / "audio.wav"
+        extract_audio_with_ffmpeg(source_path, audio_path)
+
+        return DownloadedAudio(
+            path=audio_path,
+            title=event.original_file_name or "Telegram file",
+            duration_seconds=None,
+        )
+
+    def get_file_path(self, telegram_file_id: str) -> str:
+        url = (
+            f"{self._settings.telegram_api_base_url.rstrip('/')}"
+            f"/bot{self._settings.telegram_bot_token}/getFile?file_id={telegram_file_id}"
+        )
+
+        with urllib.request.urlopen(
+            url,
+            timeout=self._settings.telegram_file_download_timeout_seconds,
+        ) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+
+        if not payload.get("ok"):
+            raise RuntimeError("Telegram getFile returned non-ok response")
+
+        file_path = payload.get("result", {}).get("file_path")
+        if not file_path:
+            raise RuntimeError("Telegram getFile did not return file_path")
+
+        return str(file_path)
+
+    def download_file(
+        self,
+        task_dir: Path,
+        file_path: str,
+        original_file_name: str | None,
+        mime_type: str | None,
+    ) -> Path:
+        suffix = Path(original_file_name or file_path).suffix
+        if not suffix:
+            suffix = mimetypes.guess_extension(mime_type or "") or ".bin"
+
+        destination = task_dir / f"telegram-source{suffix}"
+        url = (
+            f"{self._settings.telegram_file_download_base_url.rstrip('/')}"
+            f"/bot{self._settings.telegram_bot_token}/{file_path.lstrip('/')}"
+        )
+
+        with urllib.request.urlopen(
+            url,
+            timeout=self._settings.telegram_file_download_timeout_seconds,
+        ) as response:
+            destination.write_bytes(response.read())
+
+        return destination
+
+    def task_download_dir(self, task_id: UUID) -> Path:
+        return self._settings.downloads_base_path / str(task_id)
+
+
+def build_ffmpeg_extract_audio_command(input_path: Path, output_path: Path) -> list[str]:
+    return [
+        "ffmpeg",
+        "-y",
+        "-i",
+        str(input_path),
+        "-vn",
+        "-acodec",
+        "pcm_s16le",
+        "-ar",
+        "16000",
+        "-ac",
+        "1",
+        str(output_path),
+    ]
+
+
+def extract_audio_with_ffmpeg(input_path: Path, output_path: Path) -> None:
+    command = build_ffmpeg_extract_audio_command(input_path, output_path)
+
+    try:
+        subprocess.run(
+            command,
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError("Could not extract audio from uploaded media") from exc

@@ -12,7 +12,7 @@ from app.messaging.events import (
 )
 from app.observability import record_stage_duration
 from app.observability import record_task_processed
-from app.processing.downloader import AudioDownloader
+from app.processing.downloader import SourceDownloader
 from app.processing.exporter import TranscriptExporter
 from app.processing.transcriber import WhisperTranscriber
 
@@ -25,7 +25,7 @@ class TranscriptionProcessor:
     def __init__(
         self,
         settings: Settings,
-        downloader: AudioDownloader,
+        downloader: SourceDownloader,
         transcriber: WhisperTranscriber,
         exporter: TranscriptExporter,
     ):
@@ -49,7 +49,7 @@ class TranscriptionProcessor:
                 status=TranscriptionStatus.DOWNLOADING,
             )
             with log_duration("download", task_id):
-                downloaded = self._downloader.download(task_id, event.source_url)
+                downloaded = self._downloader.download(event)
 
             requested_language = event.language or self._settings.default_language
             log.info("Transcribing taskId=%s", task_id)
@@ -76,7 +76,7 @@ class TranscriptionProcessor:
             with log_duration("export", task_id):
                 exported = self._exporter.export(
                     task_id=task_id,
-                    source_url=event.source_url,
+                    source_url=event.source_label,
                     title=downloaded.title,
                     duration_seconds=downloaded.duration_seconds,
                     language=language,
