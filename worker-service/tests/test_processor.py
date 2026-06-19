@@ -15,8 +15,10 @@ class FakeDownloader:
     def __init__(self, should_fail: bool = False):
         self.should_fail = should_fail
         self.cleanup_calls = []
+        self.download_calls = []
 
-    def download(self, task_id, source_url):
+    def download(self, event):
+        self.download_calls.append(event)
         if self.should_fail:
             raise RuntimeError("download failed")
 
