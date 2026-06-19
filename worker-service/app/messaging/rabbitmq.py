@@ -28,6 +28,32 @@ MessageHandler = Callable[[TranscriptionRequestedEvent, ProgressPublisher], Tran
 RETRY_COUNT_HEADER = "x-retry-count"
 
 
+def read_retry_count(headers: dict[str, Any] | None) -> int:
+    value = (headers or {}).get(RETRY_COUNT_HEADER, 0)
+
+    try:
+        retry_count = int(value)
+    except (TypeError, ValueError):
+        log.warning("Invalid retry count header value=%s", value)
+        return 0
+
+    return max(retry_count, 0)
+
+
+def increment_retry_count(retry_count: int) -> int:
+    return max(retry_count, 0) + 1
+
+
+def build_retry_headers(headers: dict[str, Any] | None, retry_count: int) -> dict[str, Any]:
+    retry_headers = dict(headers or {})
+    retry_headers[RETRY_COUNT_HEADER] = retry_count
+    return retry_headers
+
+
+def is_retry_allowed(retry_count: int, max_retry_attempts: int) -> bool:
+    return retry_count < max_retry_attempts
+
+
 class RabbitMqClient:
     def __init__(self, settings: Settings):
         self._settings = settings
@@ -185,6 +211,18 @@ class RabbitMqClient:
 
         try:
             result = handler(event, self.publish_progress)
+            if result.status == TranscriptionStatus.FAILED:
+                self._handle_failed_result(
+                    channel=channel,
+                    method=method,
+                    properties=properties,
+                    body=body,
+                    event=event,
+                    result=result,
+                    retry_count=retry_count,
+                )
+                return
+
             self.publish_result(result)
         except ResultPublishError:
             log.exception("Failed to publish result event taskId=%s", event.task_id)
@@ -296,11 +334,35 @@ class RabbitMqClient:
         retry_count: int,
         exc: Exception,
     ) -> None:
+        failed_event = build_failed_event(
+            task_id=event.task_id,
+            error_message=human_readable_error(exc),
+        )
+        self._handle_failed_result(
+            channel=channel,
+            method=method,
+            properties=properties,
+            body=body,
+            event=event,
+            result=failed_event,
+            retry_count=retry_count,
+        )
+
+    def _handle_failed_result(
+        self,
+        channel: BlockingChannel,
+        method: pika.spec.Basic.Deliver,
+        properties: pika.BasicProperties,
+        body: bytes,
+        event: TranscriptionRequestedEvent,
+        result: TranscriptionResultEvent,
+        retry_count: int,
+    ) -> None:
         max_attempts = self._settings.rabbitmq_max_retry_attempts
 
-        if retry_count < max_attempts:
-            next_retry_count = retry_count + 1
-            log.exception(
+        if is_retry_allowed(retry_count, max_attempts):
+            next_retry_count = increment_retry_count(retry_count)
+            log.warning(
                 "Processing failed; scheduling retry taskId=%s retryCount=%s nextRetryCount=%s maxRetryAttempts=%s",
                 event.task_id,
                 retry_count,
@@ -328,20 +390,15 @@ class RabbitMqClient:
             self._safe_ack(channel, method, task_id=event.task_id)
             return
 
-        log.exception(
+        log.error(
             "Processing failed permanently; sending to DLQ taskId=%s retryCount=%s maxRetryAttempts=%s",
             event.task_id,
             retry_count,
             max_attempts,
         )
 
-        failed_event = build_failed_event(
-            task_id=event.task_id,
-            error_message=human_readable_error(exc),
-        )
-
         try:
-            self.publish_result(failed_event)
+            self.publish_result(result)
         except ResultPublishError:
             log.exception(
                 "Failed to publish final failed event taskId=%s retryCount=%s maxRetryAttempts=%s",
@@ -370,8 +427,7 @@ class RabbitMqClient:
         task_id: Any,
     ) -> None:
         channel = self._get_publish_channel()
-        headers = dict(properties.headers or {})
-        headers[RETRY_COUNT_HEADER] = retry_count
+        headers = build_retry_headers(properties.headers, retry_count)
 
         retry_properties = pika.BasicProperties(
             content_type=properties.content_type or "application/json",
@@ -407,16 +463,7 @@ class RabbitMqClient:
         )
 
     def _retry_count(self, properties: pika.BasicProperties) -> int:
-        headers = properties.headers or {}
-        value = headers.get(RETRY_COUNT_HEADER, 0)
-
-        try:
-            retry_count = int(value)
-        except (TypeError, ValueError):
-            log.warning("Invalid retry count header value=%s", value)
-            return 0
-
-        return max(retry_count, 0)
+        return read_retry_count(properties.headers)
 
     def _require_channel(self) -> BlockingChannel:
         if self._channel is None or self._channel.is_closed:

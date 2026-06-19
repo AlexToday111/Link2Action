@@ -97,6 +97,12 @@ class TranscriptionProcessor:
                 errorMessage=None,
                 completedAt=utc_now(),
             )
+        except Exception as exc:
+            log.exception("Failed taskId=%s status=%s", task_id, TranscriptionStatus.FAILED.value)
+            return build_failed_event(
+                task_id=task_id,
+                error_message=human_readable_error(exc),
+            )
         finally:
             try:
                 self._downloader.cleanup(task_id)
