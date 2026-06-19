@@ -7,7 +7,14 @@ import pytest
 
 from app.config import Settings
 from app.messaging.events import TranscriptionResultEvent, TranscriptionStatus
-from app.messaging.rabbitmq import RETRY_COUNT_HEADER, RabbitMqClient
+from app.messaging.rabbitmq import (
+    RETRY_COUNT_HEADER,
+    RabbitMqClient,
+    build_retry_headers,
+    increment_retry_count,
+    is_retry_allowed,
+    read_retry_count,
+)
 
 
 TASK_ID = UUID("7f3a0f72-6e92-4e73-bdf7-efdf90c5aa31")
@@ -98,6 +105,41 @@ def completed_event() -> TranscriptionResultEvent:
     )
 
 
+def failed_event(message: str = "processing failed") -> TranscriptionResultEvent:
+    return TranscriptionResultEvent(
+        taskId=TASK_ID,
+        status=TranscriptionStatus.FAILED,
+        errorMessage=message,
+    )
+
+
+def test_read_retry_count_defaults_to_zero_without_header():
+    assert read_retry_count({}) == 0
+    assert read_retry_count(None) == 0
+
+
+def test_read_retry_count_defaults_to_zero_for_invalid_header():
+    assert read_retry_count({RETRY_COUNT_HEADER: "invalid"}) == 0
+    assert read_retry_count({RETRY_COUNT_HEADER: -1}) == 0
+
+
+def test_build_retry_headers_preserves_existing_headers_and_sets_retry_count():
+    headers = build_retry_headers({"correlation": "abc"}, 2)
+
+    assert headers == {"correlation": "abc", RETRY_COUNT_HEADER: 2}
+
+
+def test_retry_count_increments():
+    assert increment_retry_count(0) == 1
+    assert increment_retry_count(2) == 3
+    assert increment_retry_count(-5) == 1
+
+
+def test_retry_allowed_before_max_and_denied_at_max():
+    assert is_retry_allowed(retry_count=2, max_retry_attempts=3) is True
+    assert is_retry_allowed(retry_count=3, max_retry_attempts=3) is False
+
+
 def test_invalid_json_rejected_without_requeue():
     client, channel = make_client()
 
@@ -161,6 +203,29 @@ def test_processing_error_schedules_retry_while_retry_count_below_max():
     assert publish["properties"].headers[RETRY_COUNT_HEADER] == 2
 
 
+def test_failed_result_schedules_retry_while_retry_count_below_max():
+    client, channel = make_client()
+
+    def handler(event, progress_publisher):
+        return failed_event("temporary failure")
+
+    client._handle_delivery(
+        channel=channel,
+        method=make_method(),
+        properties=make_properties(retry_count=1),
+        body=make_request_body(),
+        handler=handler,
+    )
+
+    assert channel.acks == [42]
+    assert channel.rejects == []
+    assert channel.nacks == []
+    assert len(channel.publishes) == 1
+    publish = channel.publishes[0]
+    assert publish["routing_key"] == "transcription.requested.retry"
+    assert publish["properties"].headers[RETRY_COUNT_HEADER] == 2
+
+
 def test_processing_error_goes_to_dlq_when_retry_count_reaches_max():
     settings = Settings(rabbitmq_max_retry_attempts=3)
     client, channel = make_client(settings)
@@ -174,6 +239,33 @@ def test_processing_error_goes_to_dlq_when_retry_count_reaches_max():
         properties=make_properties(retry_count=3),
         body=make_request_body(),
         handler=failing_handler,
+    )
+
+    assert channel.acks == []
+    assert channel.nacks == []
+    assert channel.rejects == [(42, False)]
+    assert len(channel.publishes) == 1
+    publish = channel.publishes[0]
+    assert publish["routing_key"] == "transcription.failed"
+    payload = json.loads(publish["body"].decode("utf-8"))
+    assert payload["taskId"] == str(TASK_ID)
+    assert payload["status"] == "FAILED"
+    assert payload["errorMessage"] == "permanent failure"
+
+
+def test_failed_result_goes_to_dlq_when_retry_count_reaches_max():
+    settings = Settings(rabbitmq_max_retry_attempts=3)
+    client, channel = make_client(settings)
+
+    def handler(event, progress_publisher):
+        return failed_event("permanent failure")
+
+    client._handle_delivery(
+        channel=channel,
+        method=make_method(),
+        properties=make_properties(retry_count=3),
+        body=make_request_body(),
+        handler=handler,
     )
 
     assert channel.acks == []
