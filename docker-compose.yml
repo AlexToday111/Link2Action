@@ -41,6 +41,11 @@ services:
       RABBITMQ_PORT: 5672
       RABBITMQ_USERNAME: guest
       RABBITMQ_PASSWORD: guest
+      RABBITMQ_REQUEST_RETRY_QUEUE: linkscribe.transcription.requests.retry
+      RABBITMQ_REQUEST_DLQ: linkscribe.transcription.requests.dlq
+      RABBITMQ_RETRY_ROUTING_KEY: transcription.requested.retry
+      RABBITMQ_DLQ_ROUTING_KEY: transcription.requested.dlq
+      RABBITMQ_RETRY_DELAY_MS: 30000
       RABBITMQ_PROGRESS_ROUTING_KEY: transcription.progress
       
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
@@ -52,6 +57,12 @@ services:
       - "8080:8080"
     volumes:
       - ./data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/actuator/health | grep UP"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
   worker-service:
     build:
@@ -71,9 +82,15 @@ services:
       RABBITMQ_REQUEST_QUEUE: linkscribe.transcription.requests
       RABBITMQ_RESULT_QUEUE: linkscribe.transcription.results
       RABBITMQ_REQUEST_ROUTING_KEY: transcription.requested
+      RABBITMQ_RETRY_ROUTING_KEY: transcription.requested.retry
+      RABBITMQ_DLQ_ROUTING_KEY: transcription.requested.dlq
       RABBITMQ_COMPLETED_ROUTING_KEY: transcription.completed
       RABBITMQ_FAILED_ROUTING_KEY: transcription.failed
       RABBITMQ_PROGRESS_ROUTING_KEY: transcription.progress
+      RABBITMQ_REQUEST_RETRY_QUEUE: linkscribe.transcription.requests.retry
+      RABBITMQ_REQUEST_DLQ: linkscribe.transcription.requests.dlq
+      RABBITMQ_RETRY_DELAY_MS: 30000
+      RABBITMQ_MAX_RETRY_ATTEMPTS: 3
       RABBITMQ_HEARTBEAT: 0
       RABBITMQ_BLOCKED_CONNECTION_TIMEOUT: 300
 
@@ -89,8 +106,18 @@ services:
       RABBITMQ_PREFETCH_COUNT: 1
       RABBITMQ_CONNECTION_ATTEMPTS: 30
       RABBITMQ_CONNECTION_RETRY_SECONDS: 2
+      WORKER_METRICS_ENABLED: "true"
+      WORKER_METRICS_PORT: 9091
+    ports:
+      - "9091:9091"
     volumes:
       - ./data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:9091/health', timeout=2).read()\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
 
 volumes:
   postgres-data:
