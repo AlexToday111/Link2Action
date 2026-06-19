@@ -8,6 +8,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.data.domain.PageRequest
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
+import java.security.MessageDigest
 import java.util.UUID
 
 @Service
@@ -57,6 +58,25 @@ class TranscriptionTaskService(
 
     @Transactional
     fun createTask(command: CreateTranscriptionTaskCommand): UUID {
+        val formats = normalizeFormats(command.requestedFormats)
+        val idempotencyKey = buildIdempotencyKey(
+            telegramUserId = command.telegramUserId,
+            sourceUrl = command.sourceUrl,
+            requestedFormat = formats.joinToString(","),
+            language = command.language
+        )
+        val existingTask = findActiveTaskByIdempotencyKey(idempotencyKey)
+
+        if (existingTask != null) {
+            log.info(
+                "Returning existing active transcription task: taskId={}, userId={}, idempotencyKey={}",
+                existingTask.id,
+                existingTask.telegramUserId,
+                idempotencyKey
+            )
+            return existingTask.id
+        }
+
         validateActiveTaskLimit(command.telegramUserId)
 
         val now = clockProvider.now()
@@ -68,8 +88,9 @@ class TranscriptionTaskService(
             telegramUserId = command.telegramUserId,
             sourceUrl = command.sourceUrl,
             status = TranscriptionStatus.QUEUED,
-            requestedFormat = command.requestedFormats.joinToString(","),
+            requestedFormat = formats.joinToString(","),
             language = command.language,
+            idempotencyKey = idempotencyKey,
             createdAt = now,
             updatedAt = now
         )
@@ -80,7 +101,7 @@ class TranscriptionTaskService(
             taskId = task.id,
             sourceUrl = task.sourceUrl,
             language = task.language,
-            formats = command.requestedFormats.toList(),
+            formats = formats,
             createdAt = task.createdAt
         )
 
@@ -115,12 +136,39 @@ class TranscriptionTaskService(
             )
         }
 
+        val formats = normalizeFormats(requestedFormats)
+        val idempotencyKey = buildIdempotencyKey(
+            telegramUserId = task.telegramUserId,
+            sourceUrl = task.sourceUrl,
+            requestedFormat = formats.joinToString(","),
+            language = task.language
+        )
+        val existingTask = findActiveTaskByIdempotencyKey(idempotencyKey)
+
+        if (existingTask != null) {
+            task.markDeleted(clockProvider.now())
+
+            log.info(
+                "Returning existing active transcription task after duplicate format selection: taskId={}, duplicateTaskId={}, idempotencyKey={}",
+                existingTask.id,
+                task.id,
+                idempotencyKey
+            )
+
+            return FormatSelectionResult(
+                task = existingTask,
+                queued = false,
+                alreadySelected = false,
+                duplicateActive = true
+            )
+        }
+
         validateActiveTaskLimit(telegramUserId)
 
-        val formats = normalizeFormats(requestedFormats)
         val now = clockProvider.now()
         task.markQueued(
             requestedFormats = formats,
+            idempotencyKey = idempotencyKey,
             now = now
         )
 
@@ -429,15 +477,42 @@ class TranscriptionTaskService(
 
     private fun normalizeFormats(requestedFormats: Collection<String>): List<String> {
         val formats = requestedFormats
-            .map { it.uppercase() }
+            .map { it.trim().uppercase() }
             .filter { it == "TXT" || it == "MD" }
             .distinct()
+            .sortedBy { FORMAT_ORDER[it] ?: Int.MAX_VALUE }
 
         if (formats.isEmpty()) {
             throw IllegalArgumentException("No supported transcription result formats were requested")
         }
 
         return formats
+    }
+
+    private fun findActiveTaskByIdempotencyKey(idempotencyKey: String): TranscriptionTask? {
+        return repository.findFirstByIdempotencyKeyAndDeletedAtIsNullAndStatusInOrderByCreatedAtDesc(
+            idempotencyKey = idempotencyKey,
+            statuses = activeStatuses
+        )
+    }
+
+    private fun buildIdempotencyKey(
+        telegramUserId: Long,
+        sourceUrl: String,
+        requestedFormat: String,
+        language: String?
+    ): String {
+        val rawKey = listOf(
+            telegramUserId.toString(),
+            sourceUrl.trim(),
+            requestedFormat.trim().uppercase(),
+            language?.trim()?.lowercase().orEmpty()
+        ).joinToString("|")
+
+        return MessageDigest
+            .getInstance("MD5")
+            .digest(rawKey.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
     }
 
     private fun getRequiredTask(taskId: UUID): TranscriptionTask {
@@ -464,10 +539,16 @@ data class ProgressUpdateResult(
 data class FormatSelectionResult(
     val task: TranscriptionTask,
     val queued: Boolean,
-    val alreadySelected: Boolean
+    val alreadySelected: Boolean,
+    val duplicateActive: Boolean = false
 )
 
 data class FormatCancelResult(
     val task: TranscriptionTask,
     val cancelled: Boolean
+)
+
+private val FORMAT_ORDER = mapOf(
+    "TXT" to 0,
+    "MD" to 1
 )

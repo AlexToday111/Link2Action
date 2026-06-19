@@ -36,6 +36,9 @@ open class TranscriptionTask(
     @Column(name = "language", length = 16)
     open var language: String? = null,
 
+    @Column(name = "idempotency_key", length = 128)
+    open var idempotencyKey: String? = null,
+
     @Column(name = "title", columnDefinition = "text")
     open var title: String? = null,
 
@@ -75,10 +78,12 @@ open class TranscriptionTask(
 
     fun markQueued(
         requestedFormats: Collection<String>,
+        idempotencyKey: String,
         now: Instant
     ) {
         status = TranscriptionStatus.QUEUED
         requestedFormat = requestedFormats.joinToString(",")
+        this.idempotencyKey = idempotencyKey
         updatedAt = now
     }
 

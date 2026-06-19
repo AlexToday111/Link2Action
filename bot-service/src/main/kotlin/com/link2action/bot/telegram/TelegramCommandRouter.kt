@@ -481,6 +481,21 @@ class TelegramCommandRouter(
             return
         }
 
+        if (result.duplicateActive) {
+            render(
+                context = context,
+                text = """
+                    Такая задача уже выполняется.
+
+                    Текущий статус: ${result.task.status}
+                    ID: ${result.task.id}
+                """.trimIndent(),
+                replyMarkup = taskDetailKeyboard(result.task),
+                disableWebPagePreview = true
+            )
+            return
+        }
+
         val sent = render(
             context = context,
             text = """

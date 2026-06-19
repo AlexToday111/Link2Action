@@ -40,6 +40,11 @@ interface TranscriptionTaskRepository : JpaRepository<TranscriptionTask, UUID> {
         statuses: Collection<TranscriptionStatus>
     ): List<TranscriptionTask>
 
+    fun findFirstByIdempotencyKeyAndDeletedAtIsNullAndStatusInOrderByCreatedAtDesc(
+        idempotencyKey: String,
+        statuses: Collection<TranscriptionStatus>
+    ): TranscriptionTask?
+
     fun findByIdAndTelegramUserId(
         id: UUID,
         telegramUserId: Long
