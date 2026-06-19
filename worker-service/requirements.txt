@@ -1,7 +1,7 @@
-pika
-pydantic
-pydantic-settings
-yt-dlp
-faster-whisper
-pytest
-prometheus-client
+pika==1.4.1
+pydantic==2.13.4
+pydantic-settings==2.14.1
+yt-dlp==2026.6.9
+faster-whisper==1.2.1
+pytest==9.1.0
+prometheus-client==0.25.0
