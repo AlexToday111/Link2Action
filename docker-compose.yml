@@ -55,6 +55,11 @@ services:
       RESULTS_BASE_PATH: /data/results
       MAX_ACTIVE_TASKS_PER_USER: 1
       MAX_BATCH_SIZE: ${MAX_BATCH_SIZE:-5}
+      LLM_LAUNCHER_ENABLED: ${LLM_LAUNCHER_ENABLED:-true}
+      LLM_CHATGPT_URL: ${LLM_CHATGPT_URL:-https://chatgpt.com/}
+      LLM_CLAUDE_URL: ${LLM_CLAUDE_URL:-https://claude.ai/}
+      LLM_GEMINI_URL: ${LLM_GEMINI_URL:-https://gemini.google.com/}
+      LLM_PERPLEXITY_URL: ${LLM_PERPLEXITY_URL:-https://www.perplexity.ai/}
     ports:
       - "8080:8080"
     volumes:

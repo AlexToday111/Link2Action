@@ -25,12 +25,62 @@
 
 </div>
 
-Telegram-бот для расшифровки видео по ссылке. Пользователь отправляет ссылку на видео, выбирает формат результата, а бот возвращает транскрипт в **TXT** и/или **Markdown**.
+Telegram-бот для расшифровки видео по ссылке или загруженного Telegram media. Пользователь отправляет ссылку, видео, аудио или voice message, выбирает цель обработки и формат результата, а бот возвращает транскрипт, LLM-ready Markdown, prompt или LLM Package.
 
 Проект состоит из двух сервисов:
 
 * `bot-service` — Kotlin/Spring Boot сервис для работы с Telegram, PostgreSQL и RabbitMQ.
 * `worker-service` — Python-сервис для скачивания аудио и расшифровки через Whisper.
+
+---
+
+## Processing modes
+
+Доступные режимы:
+
+* `TRANSCRIPT` — полный транскрипт в TXT и/или Markdown.
+* `SUMMARY` — LLM-ready Markdown и prompt для summary.
+* `ACTION_ITEMS` — transcript и prompt для извлечения задач в LLM.
+* `STUDY_NOTES` — prompt для учебного конспекта.
+* `TECH_TASKS` — prompt для технических задач разработки.
+* `CONTENT_REPURPOSE` — prompt для постов, статьи, hooks и title ideas.
+
+Режимы кроме `TRANSCRIPT` не вызывают реальные LLM API. Worker готовит транскрипт, Markdown-шаблон и prompt для дальнейшей обработки пользователем.
+
+## LLM Launcher
+
+После завершения задачи бот может показать кнопки открытия:
+
+* ChatGPT
+* Claude
+* Gemini
+* Perplexity
+
+Бот не отправляет пользовательские данные в эти сервисы сам. Кнопка только открывает сайт выбранной LLM, а пользователь самостоятельно копирует `llm_prompt.txt` или загружает LLM Package.
+
+Переменные окружения:
+
+```env
+LLM_LAUNCHER_ENABLED=true
+LLM_CHATGPT_URL=https://chatgpt.com/
+LLM_CLAUDE_URL=https://claude.ai/
+LLM_GEMINI_URL=https://gemini.google.com/
+LLM_PERPLEXITY_URL=https://www.perplexity.ai/
+```
+
+## LLM Package
+
+`llm_package.zip` содержит:
+
+```text
+transcript.md
+transcript.txt
+llm_prompt.txt
+README.md
+metadata.json
+```
+
+Пакет предназначен для дальнейшей ручной работы в выбранной LLM: открыть сервис, загрузить `transcript.md` или вставить `llm_prompt.txt`.
 
 ---
 
