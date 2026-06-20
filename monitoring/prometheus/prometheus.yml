@@ -1,0 +1,19 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "link2action-bot-service"
+    metrics_path: "/actuator/prometheus"
+    static_configs:
+      - targets: ["bot-service:8080"]
+
+  - job_name: "link2action-worker-service"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["worker-service:9091"]
+
+  - job_name: "link2action-rabbitmq"
+    metrics_path: "/metrics"
+    static_configs:
+      - targets: ["rabbitmq:15692"]
