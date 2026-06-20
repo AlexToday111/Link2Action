@@ -240,11 +240,26 @@ class TranscriptionResultListener(
             if (!task.resultMdPath.isNullOrBlank()) {
                 downloads.add(callbackButton("📝 Скачать Markdown", "get_md:${task.id}"))
             }
+            if (!task.resultPromptPath.isNullOrBlank()) {
+                downloads.add(callbackButton("📋 Скачать Prompt", "get_prompt:${task.id}"))
+            }
+            if (!task.resultPackagePath.isNullOrBlank()) {
+                downloads.add(callbackButton("📦 Скачать Package", "get_pkg:${task.id}"))
+            }
             if (!task.resultPromptPath.isNullOrBlank() || !task.resultPackagePath.isNullOrBlank()) {
                 downloads.add(callbackButton("📥 Скачать файлы", "get_result:${task.id}"))
             }
-            if (downloads.isNotEmpty()) {
-                rows.add(downloads)
+            downloads.chunked(2).forEach { row ->
+                rows.add(row)
+            }
+
+            if (
+                !task.resultTxtPath.isNullOrBlank() ||
+                !task.resultMdPath.isNullOrBlank() ||
+                !task.resultPromptPath.isNullOrBlank() ||
+                !task.resultPackagePath.isNullOrBlank()
+            ) {
+                rows.add(listOf(callbackButton("🧠 LLM Launcher", "llm_task:${task.id}")))
             }
 
             if (appProperties.llmLauncher.enabled) {

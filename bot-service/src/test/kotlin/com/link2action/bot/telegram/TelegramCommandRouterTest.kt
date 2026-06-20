@@ -6,11 +6,17 @@ import com.link2action.bot.storage.StorageCleanupService
 import com.link2action.bot.task.CreateTranscriptionTaskCommand
 import com.link2action.bot.task.ProcessingMode
 import com.link2action.bot.task.TranscriptionSourceType
+import com.link2action.bot.task.TranscriptionStatus
+import com.link2action.bot.task.TranscriptionTask
 import com.link2action.bot.task.TranscriptionTaskService
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import org.mockito.ArgumentMatchers
 import org.mockito.Mockito
+import java.nio.file.Files
+import java.nio.file.Path
+import java.time.Instant
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -23,6 +29,9 @@ class TelegramCommandRouterTest {
     private lateinit var artifactService: TranscriptionTaskArtifactService
     private lateinit var messageSender: TelegramMessageSender
     private lateinit var router: TelegramCommandRouter
+
+    @TempDir
+    lateinit var tempDir: Path
 
     @BeforeEach
     fun setUp() {
@@ -76,6 +85,26 @@ class TelegramCommandRouterTest {
     }
 
     @Test
+    fun `main menu includes llm launcher entry`() {
+        router.route(message(text = "/start"))
+
+        val callbackData = sentReplyMarkupCallbackData()
+
+        assertTrue(callbackData.contains("llm"))
+    }
+
+    @Test
+    fun `help explains modes batch and llm launcher`() {
+        router.route(message(text = "/help"))
+
+        val text = sentText()
+
+        assertTrue(text.contains("Processing modes"))
+        assertTrue(text.contains("LLM Launcher"))
+        assertTrue(text.contains("/batch"))
+    }
+
+    @Test
     fun `failed processing mode prompt delivery cancels waiting task`() {
         val taskId = UUID.fromString("11111111-1111-1111-1111-111111111111")
 
@@ -100,6 +129,52 @@ class TelegramCommandRouterTest {
             )
         }
         assertTrue(callbackData.any { it == "f:$taskId:CR:PKG" })
+    }
+
+    @Test
+    fun `completed task detail includes llm launcher button`() {
+        val task = completedTask()
+        Mockito.`when`(taskService.getUserTask(task.id, USER_ID)).thenReturn(task)
+
+        router.routeCallback(callback("task_detail:${task.id}"))
+
+        val callbackData = editedReplyMarkupCallbackData()
+        assertTrue(callbackData.contains("llm_task:${task.id}"))
+    }
+
+    @Test
+    fun `llm launcher shows provider links and prompt package buttons`() {
+        val task = completedTask()
+        Mockito.`when`(taskService.getUserTask(task.id, USER_ID)).thenReturn(task)
+
+        router.routeCallback(callback("llm_task:${task.id}"))
+
+        val callbackData = editedReplyMarkupCallbackData()
+        val urls = editedReplyMarkupUrls()
+        val text = editedText()
+
+        assertTrue(text.contains("LLM Launcher"))
+        assertTrue(text.contains("Бот не отправляет данные"))
+        assertTrue(callbackData.contains("get_prompt:${task.id}"))
+        assertTrue(callbackData.contains("get_pkg:${task.id}"))
+        assertTrue(urls.contains("https://chatgpt.com/"))
+        assertTrue(urls.contains("https://claude.ai/"))
+        assertTrue(urls.contains("https://gemini.google.com/"))
+        assertTrue(urls.contains("https://www.perplexity.ai/"))
+    }
+
+    @Test
+    fun `llm hub lists completed tasks`() {
+        val task = completedTask()
+        Mockito.`when`(taskService.getLatestUserTasks(USER_ID, 5)).thenReturn(listOf(task))
+
+        router.routeCallback(callback("llm"))
+
+        val callbackData = editedReplyMarkupCallbackData()
+        val text = editedText()
+
+        assertTrue(text.contains("LLM Launcher"))
+        assertTrue(callbackData.contains("llm_task:${task.id}"))
     }
 
     @Test
@@ -305,6 +380,17 @@ class TelegramCommandRouterTest {
         return callbackDataFromReplyMarkup(replyMarkup)
     }
 
+    private fun editedReplyMarkupUrls(): List<String> {
+        val replyMarkup = Mockito.mockingDetails(messageSender)
+            .invocations
+            .filter { it.method.name == "editMessageText" }
+            .mapNotNull { it.arguments.getOrNull(3) as? Map<*, *> }
+            .lastOrNull()
+            ?: return emptyList()
+
+        return urlsFromReplyMarkup(replyMarkup)
+    }
+
     private fun callbackDataFromReplyMarkup(replyMarkup: Map<*, *>): List<String> {
         val rows = replyMarkup["inline_keyboard"] as? List<*>
             ?: return emptyList()
@@ -312,6 +398,33 @@ class TelegramCommandRouterTest {
         return rows
             .flatMap { row -> row as? List<*> ?: emptyList<Any>() }
             .mapNotNull { button -> (button as? Map<*, *>)?.get("callback_data") as? String }
+    }
+
+    private fun urlsFromReplyMarkup(replyMarkup: Map<*, *>): List<String> {
+        val rows = replyMarkup["inline_keyboard"] as? List<*>
+            ?: return emptyList()
+
+        return rows
+            .flatMap { row -> row as? List<*> ?: emptyList<Any>() }
+            .mapNotNull { button -> (button as? Map<*, *>)?.get("url") as? String }
+    }
+
+    private fun sentText(): String {
+        return Mockito.mockingDetails(messageSender)
+            .invocations
+            .filter { it.method.name == "sendText" }
+            .mapNotNull { it.arguments.getOrNull(1) as? String }
+            .lastOrNull()
+            .orEmpty()
+    }
+
+    private fun editedText(): String {
+        return Mockito.mockingDetails(messageSender)
+            .invocations
+            .filter { it.method.name == "editMessageText" }
+            .mapNotNull { it.arguments.getOrNull(2) as? String }
+            .lastOrNull()
+            .orEmpty()
     }
 
     private fun router(appProperties: AppProperties): TelegramCommandRouter {
@@ -380,6 +493,29 @@ class TelegramCommandRouterTest {
                 maxActiveTasksPerUser = 10,
                 maxBatchSize = maxBatchSize
             )
+        )
+    }
+
+    private fun completedTask(): TranscriptionTask {
+        val prompt = tempDir.resolve("llm_prompt.txt")
+        val archive = tempDir.resolve("llm_package.zip")
+        Files.writeString(prompt, "Prompt")
+        Files.writeString(archive, "Package")
+
+        return TranscriptionTask(
+            id = UUID.fromString("33333333-3333-3333-3333-333333333333"),
+            telegramChatId = CHAT_ID,
+            telegramUserId = USER_ID,
+            sourceType = TranscriptionSourceType.URL,
+            sourceUrl = "https://youtu.be/example",
+            status = TranscriptionStatus.COMPLETED,
+            requestedFormat = "PACKAGE",
+            processingMode = ProcessingMode.ACTION_ITEMS,
+            title = "Video title",
+            resultPromptPath = prompt.toString(),
+            resultPackagePath = archive.toString(),
+            createdAt = Instant.parse("2026-06-20T08:00:00Z"),
+            updatedAt = Instant.parse("2026-06-20T08:10:00Z")
         )
     }
 

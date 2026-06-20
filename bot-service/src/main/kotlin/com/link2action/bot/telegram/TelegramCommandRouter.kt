@@ -122,11 +122,15 @@ class TelegramCommandRouter(
                 }
 
                 data == CALLBACK_HELP -> showHelp(chatId, messageId)
+                data == CALLBACK_LLM -> showLlmHub(chatId, userId, messageId)
                 data.startsWith("$CALLBACK_TASK_DETAIL:") -> showTaskDetail(context, data)
                 data.startsWith("$CALLBACK_TASK_OPEN:") -> showTaskDetail(context, data)
+                data.startsWith("$CALLBACK_LLM_TASK:") -> showTaskLlmLauncher(context, data)
                 data.startsWith("$CALLBACK_GET_RESULT:") -> handleGetCallback(context, data)
                 data.startsWith("$CALLBACK_GET_TXT:") -> handleGetCallback(context, data)
                 data.startsWith("$CALLBACK_GET_MD:") -> handleGetCallback(context, data)
+                data.startsWith("$CALLBACK_GET_PROMPT:") -> handleGetCallback(context, data)
+                data.startsWith("$CALLBACK_GET_PACKAGE:") -> handleGetCallback(context, data)
                 data.startsWith("$CALLBACK_DELETE_FILES_REQUEST:") -> handleDeleteFilesRequest(context, data)
                 data.startsWith("$CALLBACK_DELETE_FILES_CONFIRM:") -> handleDeleteFilesConfirm(context, data)
                 data.startsWith("$CALLBACK_DELETE_FILES_CANCEL:") -> showTaskDetail(context, data, fallbackToHistory = true)
@@ -189,20 +193,51 @@ class TelegramCommandRouter(
         render(
             context = CallbackContext(chatId = chatId, messageId = messageId, userId = null),
             text = """
-                Как пользоваться:
+                Помощь по Link2Action
 
-                1. Скопируй ссылку на видео.
-                2. Отправь её сюда обычным сообщением.
-                3. Выбери цель обработки и формат результата.
-                4. Я покажу прогресс обработки.
-                5. После обработки пришлю выбранные файлы.
+                Что можно отправлять:
+                — ссылку на видео;
+                — видеофайл;
+                — аудиофайл;
+                — voice message;
+                — несколько источников через /batch.
+
+                Как работает обычный сценарий:
+                1. Отправь ссылку или файл.
+                2. Выбери цель обработки.
+                3. Выбери формат результата.
+                4. Дождись завершения.
+                5. Скачай файлы или открой LLM Launcher.
+
+                Processing modes:
+                — Transcript: полная расшифровка.
+                — Summary: prompt и Markdown для краткого содержания.
+                — Action items: prompt для извлечения задач.
+                — Study notes: учебный конспект.
+                — Tech tasks: задачи для разработки.
+                — Content repurpose: посты, статья, hooks и title ideas.
+
+                Форматы:
+                — TXT: простой transcript.
+                — Markdown: transcript или LLM-ready Markdown.
+                — LLM Package: zip с transcript.md, transcript.txt, llm_prompt.txt, README.md и metadata.json.
+
+                LLM Launcher:
+                Бот не отправляет данные в ChatGPT, Claude, Gemini или Perplexity сам.
+                Раздел только даёт prompt/package и кнопки открытия LLM-сервисов.
+                Вернуться к нему можно через Меню → LLM Launcher или через Мои задачи → нужная задача.
 
                 Команды:
-                /history — история задач
+                /start — главное меню
+                /help — эта справка
+                /history — мои задачи
                 /status — активные задачи
                 /status <taskId> — статус конкретной задачи
                 /get <taskId> — скачать готовый результат ещё раз
-                /clear — очистить свои файлы
+                /batch — добавить несколько источников
+                /done — запустить batch
+                /cancel — отменить batch
+                /clear — очистить сохранённые файлы
             """.trimIndent(),
             replyMarkup = menuOnlyKeyboard()
         )
@@ -339,6 +374,8 @@ class TelegramCommandRouter(
         val fileType = when (action) {
             CALLBACK_GET_TXT -> ResultFileType.TXT
             CALLBACK_GET_MD -> ResultFileType.MD
+            CALLBACK_GET_PROMPT -> ResultFileType.PROMPT
+            CALLBACK_GET_PACKAGE -> ResultFileType.PACKAGE
             else -> ResultFileType.ALL
         }
 
@@ -346,6 +383,81 @@ class TelegramCommandRouter(
             context = context,
             taskId = taskId,
             fileType = fileType
+        )
+    }
+
+    private fun showLlmHub(
+        chatId: Long,
+        userId: Long,
+        messageId: Long?
+    ) {
+        val tasks = taskService.getLatestUserTasks(userId, HISTORY_LIMIT)
+            .filter { task ->
+                task.status == TranscriptionStatus.COMPLETED && fileAvailability(task).hasAny
+            }
+        val context = CallbackContext(chatId = chatId, messageId = messageId, userId = userId)
+
+        if (tasks.isEmpty()) {
+            render(
+                context = context,
+                text = """
+                    🧠 LLM Launcher
+
+                    Готовых задач с файлами пока нет.
+
+                    Отправь ссылку, видео, аудио или voice message, выбери режим обработки и дождись результата.
+                    После этого здесь появятся prompt, package и кнопки открытия LLM.
+                """.trimIndent(),
+                replyMarkup = historyAndMenuKeyboard(),
+                disableWebPagePreview = true
+            )
+            return
+        }
+
+        render(
+            context = context,
+            text = """
+                🧠 LLM Launcher
+
+                Выбери готовую задачу.
+                Я покажу prompt/package и кнопки открытия LLM.
+
+                Данные не отправляются в сторонние сервисы автоматически.
+            """.trimIndent(),
+            replyMarkup = llmHubKeyboard(tasks),
+            disableWebPagePreview = true
+        )
+    }
+
+    private fun showTaskLlmLauncher(
+        context: CallbackContext,
+        data: String
+    ) {
+        val task = getCallbackTask(context, data) ?: return
+
+        if (task.status != TranscriptionStatus.COMPLETED) {
+            render(
+                context = context,
+                text = "LLM Launcher станет доступен после завершения задачи.",
+                replyMarkup = taskDetailKeyboard(task)
+            )
+            return
+        }
+
+        if (!fileAvailability(task).hasAny) {
+            render(
+                context = context,
+                text = "Файлы результата больше не найдены. Возможно, хранилище было очищено.",
+                replyMarkup = taskDetailKeyboard(task)
+            )
+            return
+        }
+
+        render(
+            context = context,
+            text = buildLlmLauncherMessage(task),
+            replyMarkup = llmLauncherKeyboard(task),
+            disableWebPagePreview = true
         )
     }
 
@@ -1335,6 +1447,38 @@ class TelegramCommandRouter(
         return lines.joinToString("\n")
     }
 
+    private fun buildLlmLauncherMessage(task: TranscriptionTask): String {
+        val lines = mutableListOf(
+            "🧠 LLM Launcher",
+            "",
+            "Задача: ${shortTaskId(task.id).removeSuffix("...")}",
+            "Режим: ${processingModeLabel(task.processingMode)}"
+        )
+
+        task.title
+            ?.takeIf { it.isNotBlank() }
+            ?.let { lines.add("Видео: $it") }
+            ?: lines.add(buildTaskSourceLine(task))
+
+        lines.add("")
+
+        if (task.processingMode == ProcessingMode.ACTION_ITEMS) {
+            lines.add("Я подготовил transcript и prompt, чтобы быстро извлечь action items в выбранной LLM.")
+        } else {
+            lines.add("Я подготовил файлы для дальнейшей ручной работы в выбранной LLM.")
+        }
+
+        lines.add("")
+        lines.add("Что дальше:")
+        lines.add("1. Скачай prompt или LLM Package.")
+        lines.add("2. Нажми на нужную LLM.")
+        lines.add("3. Вставь prompt или загрузи package.")
+        lines.add("")
+        lines.add("Бот не отправляет данные в сторонние сервисы автоматически.")
+
+        return lines.joinToString("\n")
+    }
+
     private fun buildActiveTasksMessage(tasks: List<TranscriptionTask>): String {
         val lines = mutableListOf("Сейчас обрабатывается:", "")
 
@@ -1411,6 +1555,10 @@ class TelegramCommandRouter(
             rows.add(listOf(button("📥 Скачать результат", "$CALLBACK_GET_RESULT:${task.id}")))
         }
 
+        if (task.status == TranscriptionStatus.COMPLETED && fileAvailability.hasAny) {
+            rows.add(listOf(button("🧠 LLM Launcher", "$CALLBACK_LLM_TASK:${task.id}")))
+        }
+
         if (hasStoredFilePaths(task)) {
             rows.add(listOf(button("🧹 Удалить файлы", "$CALLBACK_DELETE_FILES_REQUEST:${task.id}")))
         }
@@ -1430,6 +1578,7 @@ class TelegramCommandRouter(
     private fun startKeyboard(): Map<String, Any> {
         return inlineKeyboard(
             listOf(button("📜 Мои задачи", CALLBACK_HISTORY)),
+            listOf(button("🧠 LLM Launcher", CALLBACK_LLM)),
             listOf(button("🔄 Статус", CALLBACK_STATUS_ACTIVE)),
             listOf(button("🧹 Очистить мои файлы", CALLBACK_CLEAR_STORAGE_REQUEST)),
             listOf(button("ℹ️ Помощь", CALLBACK_HELP))
@@ -1541,6 +1690,71 @@ class TelegramCommandRouter(
         )
     }
 
+    private fun llmHubKeyboard(tasks: List<TranscriptionTask>): Map<String, Any> {
+        val rows = tasks.mapIndexed { index, task ->
+            val title = taskDisplayTitle(task)
+                .replace("\n", " ")
+                .take(40)
+            listOf(button("${numberEmoji(index + 1)} $title", "$CALLBACK_LLM_TASK:${task.id}"))
+        }.toMutableList()
+
+        rows.add(listOf(button("📜 Мои задачи", CALLBACK_HISTORY)))
+        rows.add(listOf(button("🏠 Меню", CALLBACK_MENU)))
+
+        return inlineKeyboard(*rows.toTypedArray())
+    }
+
+    private fun llmLauncherKeyboard(task: TranscriptionTask): Map<String, Any> {
+        val rows = mutableListOf<List<Map<String, String>>>()
+        val availability = fileAvailability(task)
+        val downloads = mutableListOf<Map<String, String>>()
+
+        if (availability.hasPrompt) {
+            downloads.add(button("📋 Prompt", "$CALLBACK_GET_PROMPT:${task.id}"))
+        }
+
+        if (availability.hasPackage) {
+            downloads.add(button("📦 Package", "$CALLBACK_GET_PACKAGE:${task.id}"))
+        }
+
+        if (downloads.isNotEmpty()) {
+            rows.add(downloads)
+        }
+
+        if (!availability.hasPrompt && availability.hasMd) {
+            rows.add(listOf(button("📝 Markdown", "$CALLBACK_GET_MD:${task.id}")))
+        }
+
+        if (!availability.hasPackage && availability.hasTxt) {
+            rows.add(listOf(button("📄 TXT", "$CALLBACK_GET_TXT:${task.id}")))
+        }
+
+        if (appProperties.llmLauncher.enabled) {
+            rows.add(
+                listOf(
+                    urlButton("🤖 ChatGPT", appProperties.llmLauncher.chatgptUrl),
+                    urlButton("🟣 Claude", appProperties.llmLauncher.claudeUrl)
+                )
+            )
+            rows.add(
+                listOf(
+                    urlButton("🔷 Gemini", appProperties.llmLauncher.geminiUrl),
+                    urlButton("🔎 Perplexity", appProperties.llmLauncher.perplexityUrl)
+                )
+            )
+        }
+
+        rows.add(listOf(button("⬅️ К задаче", "$CALLBACK_TASK_DETAIL:${task.id}")))
+        rows.add(
+            listOf(
+                button("📜 Мои задачи", CALLBACK_HISTORY),
+                button("🏠 Меню", CALLBACK_MENU)
+            )
+        )
+
+        return inlineKeyboard(*rows.toTypedArray())
+    }
+
     private fun deleteFilesConfirmationKeyboard(taskId: UUID): Map<String, Any> {
         return inlineKeyboard(
             listOf(
@@ -1611,7 +1825,7 @@ class TelegramCommandRouter(
         }
 
         val promptPath = task.resultPromptPath
-        if (fileType == ResultFileType.ALL && !promptPath.isNullOrBlank()) {
+        if ((fileType == ResultFileType.ALL || fileType == ResultFileType.PROMPT) && !promptPath.isNullOrBlank()) {
             files.add(
                 ResultFile(
                     path = Path.of(promptPath),
@@ -1622,7 +1836,7 @@ class TelegramCommandRouter(
         }
 
         val packagePath = task.resultPackagePath
-        if (fileType == ResultFileType.ALL && !packagePath.isNullOrBlank()) {
+        if ((fileType == ResultFileType.ALL || fileType == ResultFileType.PACKAGE) && !packagePath.isNullOrBlank()) {
             files.add(
                 ResultFile(
                     path = Path.of(packagePath),
@@ -2008,7 +2222,9 @@ class TelegramCommandRouter(
     private enum class ResultFileType {
         ALL,
         TXT,
-        MD
+        MD,
+        PROMPT,
+        PACKAGE
     }
 
     private companion object {
@@ -2023,11 +2239,15 @@ class TelegramCommandRouter(
         const val CALLBACK_CLEAN_STORAGE_CONFIRM = "clean_storage_confirm"
         const val CALLBACK_CLEAN_STORAGE_CANCEL = "clean_storage_cancel"
         const val CALLBACK_HELP = "help"
+        const val CALLBACK_LLM = "llm"
+        const val CALLBACK_LLM_TASK = "llm_task"
         const val CALLBACK_TASK_DETAIL = "task_detail"
         const val CALLBACK_TASK_OPEN = "task_open"
         const val CALLBACK_GET_RESULT = "get_result"
         const val CALLBACK_GET_TXT = "get_txt"
         const val CALLBACK_GET_MD = "get_md"
+        const val CALLBACK_GET_PROMPT = "get_prompt"
+        const val CALLBACK_GET_PACKAGE = "get_pkg"
         const val CALLBACK_DELETE_FILES_REQUEST = "delete_files_request"
         const val CALLBACK_DELETE_FILES_CONFIRM = "delete_files_confirm"
         const val CALLBACK_DELETE_FILES_CANCEL = "delete_files_cancel"
