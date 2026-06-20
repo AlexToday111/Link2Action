@@ -82,6 +82,9 @@ class TranscriptionProcessor:
                     language=language,
                     requested_formats=event.requested_formats,
                     transcription=transcription,
+                    processing_mode=event.processing_mode,
+                    source_type=event.source_type,
+                    created_at=event.created_at.isoformat(),
                 )
 
             log.info("Completed taskId=%s status=%s", task_id, TranscriptionStatus.COMPLETED.value)
@@ -94,6 +97,8 @@ class TranscriptionProcessor:
                 language=language,
                 resultTxtPath=str(exported.txt_path) if exported.txt_path is not None else None,
                 resultMdPath=str(exported.md_path) if exported.md_path is not None else None,
+                resultPromptPath=str(exported.prompt_path) if exported.prompt_path is not None else None,
+                resultPackagePath=str(exported.package_path) if exported.package_path is not None else None,
                 errorMessage=None,
                 completedAt=utc_now(),
             )
@@ -119,6 +124,8 @@ def build_failed_event(task_id, error_message: str) -> TranscriptionResultEvent:
         language=None,
         resultTxtPath=None,
         resultMdPath=None,
+        resultPromptPath=None,
+        resultPackagePath=None,
         errorMessage=error_message,
         completedAt=utc_now(),
     )
@@ -139,6 +146,8 @@ def build_progress_event(
         language=language,
         resultTxtPath=None,
         resultMdPath=None,
+        resultPromptPath=None,
+        resultPackagePath=None,
         errorMessage=None,
         completedAt=None,
     )

@@ -19,6 +19,15 @@ class SourceType(StrEnum):
     TELEGRAM_FILE = "TELEGRAM_FILE"
 
 
+class ProcessingMode(StrEnum):
+    TRANSCRIPT = "TRANSCRIPT"
+    SUMMARY = "SUMMARY"
+    ACTION_ITEMS = "ACTION_ITEMS"
+    STUDY_NOTES = "STUDY_NOTES"
+    TECH_TASKS = "TECH_TASKS"
+    CONTENT_REPURPOSE = "CONTENT_REPURPOSE"
+
+
 class TranscriptionRequestedEvent(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
@@ -30,6 +39,7 @@ class TranscriptionRequestedEvent(BaseModel):
     original_file_name: str | None = Field(default=None, alias="originalFileName")
     mime_type: str | None = Field(default=None, alias="mimeType")
     file_size_bytes: int | None = Field(default=None, alias="fileSizeBytes")
+    processing_mode: ProcessingMode = Field(default=ProcessingMode.TRANSCRIPT, alias="processingMode")
     language: str | None = None
     formats: list[str] = Field(default_factory=list)
     created_at: datetime = Field(alias="createdAt")
@@ -66,6 +76,8 @@ class TranscriptionResultEvent(BaseModel):
     language: str | None = None
     result_txt_path: str | None = Field(default=None, alias="resultTxtPath")
     result_md_path: str | None = Field(default=None, alias="resultMdPath")
+    result_prompt_path: str | None = Field(default=None, alias="resultPromptPath")
+    result_package_path: str | None = Field(default=None, alias="resultPackagePath")
     error_message: str | None = Field(default=None, alias="errorMessage")
     completed_at: datetime | None = Field(default=None, alias="completedAt")
 
