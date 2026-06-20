@@ -2,6 +2,7 @@ package com.link2action.bot.queue
 
 import com.link2action.bot.artifact.ArtifactType
 import com.link2action.bot.artifact.TranscriptionTaskArtifactService
+import com.link2action.bot.config.AppProperties
 import com.link2action.bot.observability.TranscriptionMetrics
 import com.link2action.bot.task.TranscriptionTask
 import com.link2action.bot.task.TranscriptionTaskService
@@ -15,7 +16,8 @@ class TranscriptionResultListener(
     private val taskService: TranscriptionTaskService,
     private val artifactService: TranscriptionTaskArtifactService,
     private val telegramMessageSender: TelegramMessageSender,
-    private val transcriptionMetrics: TranscriptionMetrics
+    private val transcriptionMetrics: TranscriptionMetrics,
+    private val appProperties: AppProperties
 ) {
     private val log = LoggerFactory.getLogger(javaClass)
 
@@ -46,7 +48,12 @@ class TranscriptionResultListener(
     }
 
     private fun handleCompleted(event: TranscriptionResultEvent) {
-        if (event.resultTxtPath.isNullOrBlank() && event.resultMdPath.isNullOrBlank()) {
+        if (
+            event.resultTxtPath.isNullOrBlank() &&
+            event.resultMdPath.isNullOrBlank() &&
+            event.resultPromptPath.isNullOrBlank() &&
+            event.resultPackagePath.isNullOrBlank()
+        ) {
             val task = taskService.markFailed(
                 taskId = event.taskId,
                 errorMessage = "Worker completed task but did not provide result files"
@@ -66,6 +73,8 @@ class TranscriptionResultListener(
             taskId = event.taskId,
             resultTxtPath = event.resultTxtPath,
             resultMdPath = event.resultMdPath,
+            resultPromptPath = event.resultPromptPath,
+            resultPackagePath = event.resultPackagePath,
             title = event.title,
             durationSeconds = event.durationSeconds,
             detectedLanguage = event.language
@@ -76,55 +85,27 @@ class TranscriptionResultListener(
             chatId = task.telegramChatId,
             messageId = task.progressMessageId,
             text = """
-                Готово.
+                ${if (task.processingMode.name == "ACTION_ITEMS") "Action package готов" else "Готово."}
 
-                Отправляю выбранные файлы.
+                ${if (task.processingMode.name == "ACTION_ITEMS") "Я подготовил transcript и prompt, чтобы быстро извлечь action items в выбранной LLM." else "Отправляю выбранные файлы."}
             """.trimIndent(),
-            replyMarkup = resultNavigationKeyboard()
+            replyMarkup = resultNavigationKeyboard(task)
         )
 
-        if (!event.resultMdPath.isNullOrBlank()) {
-            val sent = telegramMessageSender.sendDocument(
-                chatId = task.telegramChatId,
-                filePath = event.resultMdPath,
-                caption = buildTranscriptCaption(
-                    task = task,
-                    format = "Markdown",
-                    icon = "📝"
-                )
-            )
+        if (!event.resultPackagePath.isNullOrBlank()) {
+            sendAndRecord(task, event.resultPackagePath, "📦 LLM Package", ArtifactType.PACKAGE)
+        }
 
-            if (sent != null) {
-                artifactService.recordArtifact(
-                    taskId = task.id,
-                    telegramChatId = task.telegramChatId,
-                    telegramMessageId = sent.messageId,
-                    artifactType = ArtifactType.MD,
-                    filePath = event.resultMdPath
-                )
-            }
+        if (!event.resultPromptPath.isNullOrBlank()) {
+            sendAndRecord(task, event.resultPromptPath, "📋 LLM prompt", ArtifactType.PROMPT)
+        }
+
+        if (!event.resultMdPath.isNullOrBlank()) {
+            sendAndRecord(task, event.resultMdPath, buildTranscriptCaption(task, "Markdown", "📝"), ArtifactType.MD)
         }
 
         if (!event.resultTxtPath.isNullOrBlank()) {
-            val sent = telegramMessageSender.sendDocument(
-                chatId = task.telegramChatId,
-                filePath = event.resultTxtPath,
-                caption = buildTranscriptCaption(
-                    task = task,
-                    format = "TXT",
-                    icon = "📄"
-                )
-            )
-
-            if (sent != null) {
-                artifactService.recordArtifact(
-                    taskId = task.id,
-                    telegramChatId = task.telegramChatId,
-                    telegramMessageId = sent.messageId,
-                    artifactType = ArtifactType.TXT,
-                    filePath = event.resultTxtPath
-                )
-            }
+            sendAndRecord(task, event.resultTxtPath, buildTranscriptCaption(task, "TXT", "📄"), ArtifactType.TXT)
         }
 
         log.info("Completed transcription task delivery: taskId={}", event.taskId)
@@ -196,6 +177,29 @@ class TranscriptionResultListener(
         )
     }
 
+    private fun sendAndRecord(
+        task: TranscriptionTask,
+        filePath: String,
+        caption: String,
+        artifactType: ArtifactType
+    ) {
+        val sent = telegramMessageSender.sendDocument(
+            chatId = task.telegramChatId,
+            filePath = filePath,
+            caption = caption
+        )
+
+        if (sent != null) {
+            artifactService.recordArtifact(
+                taskId = task.id,
+                telegramChatId = task.telegramChatId,
+                telegramMessageId = sent.messageId,
+                artifactType = artifactType,
+                filePath = filePath
+            )
+        }
+    }
+
     private fun editTaskMessage(
         taskId: java.util.UUID,
         chatId: Long,
@@ -225,12 +229,57 @@ class TranscriptionResultListener(
         }
     }
 
-    private fun resultNavigationKeyboard(): Map<String, Any> {
+    private fun resultNavigationKeyboard(task: TranscriptionTask? = null): Map<String, Any> {
+        val rows = mutableListOf<List<Map<String, String>>>()
+
+        if (task != null) {
+            val downloads = mutableListOf<Map<String, String>>()
+            if (!task.resultTxtPath.isNullOrBlank()) {
+                downloads.add(callbackButton("📄 Скачать TXT", "get_txt:${task.id}"))
+            }
+            if (!task.resultMdPath.isNullOrBlank()) {
+                downloads.add(callbackButton("📝 Скачать Markdown", "get_md:${task.id}"))
+            }
+            if (!task.resultPromptPath.isNullOrBlank() || !task.resultPackagePath.isNullOrBlank()) {
+                downloads.add(callbackButton("📥 Скачать файлы", "get_result:${task.id}"))
+            }
+            if (downloads.isNotEmpty()) {
+                rows.add(downloads)
+            }
+
+            if (appProperties.llmLauncher.enabled) {
+                rows.add(
+                    listOf(
+                        urlButton("🤖 ChatGPT", appProperties.llmLauncher.chatgptUrl),
+                        urlButton("🟣 Claude", appProperties.llmLauncher.claudeUrl)
+                    )
+                )
+                rows.add(
+                    listOf(
+                        urlButton("🔷 Gemini", appProperties.llmLauncher.geminiUrl),
+                        urlButton("🔎 Perplexity", appProperties.llmLauncher.perplexityUrl)
+                    )
+                )
+            }
+        }
+
+        rows.add(listOf(callbackButton("📜 Мои задачи", "history")))
+        rows.add(listOf(callbackButton("🏠 Меню", "menu")))
+
+        return mapOf("inline_keyboard" to rows)
+    }
+
+    private fun callbackButton(text: String, callbackData: String): Map<String, String> {
         return mapOf(
-            "inline_keyboard" to listOf(
-                listOf(mapOf("text" to "📜 Мои задачи", "callback_data" to "history")),
-                listOf(mapOf("text" to "🏠 Меню", "callback_data" to "menu"))
-            )
+            "text" to text,
+            "callback_data" to callbackData
+        )
+    }
+
+    private fun urlButton(text: String, url: String): Map<String, String> {
+        return mapOf(
+            "text" to text,
+            "url" to url
         )
     }
 

@@ -7,6 +7,7 @@ import com.link2action.bot.config.AppProperties
 import com.link2action.bot.storage.StorageCleanupService
 import com.link2action.bot.task.ActiveTaskLimitExceededException
 import com.link2action.bot.task.CreateTranscriptionTaskCommand
+import com.link2action.bot.task.ProcessingMode
 import com.link2action.bot.task.TranscriptionSourceType
 import com.link2action.bot.task.TranscriptionStatus
 import com.link2action.bot.task.TranscriptionTask
@@ -136,8 +137,10 @@ class TelegramCommandRouter(
                 data.startsWith("$CALLBACK_OLD_DELETE_TASK_CONFIRM:") -> handleDeleteFilesConfirm(context, data)
                 data.startsWith("$CALLBACK_OLD_DELETE_TASK_CANCEL:") -> showTaskDetail(context, data, fallbackToHistory = true)
                 data.startsWith("$CALLBACK_REPEAT_TASK:") -> handleRepeatTask(context, data)
+                data.startsWith("$CALLBACK_MODE_SELECT:") -> handleModeSelect(context, data)
                 data.startsWith("$CALLBACK_FORMAT_SELECT:") -> handleFormatSelect(context, data)
                 data.startsWith("$CALLBACK_FORMAT_CANCEL:") -> handleFormatCancel(context, data)
+                data.startsWith("$CALLBACK_BATCH_MODE_SELECT:") -> handleBatchModeSelect(context, data)
                 data.startsWith("$CALLBACK_BATCH_FORMAT_SELECT:") -> handleBatchFormatSelect(context, data)
                 else -> {
                     log.warn(
@@ -489,7 +492,7 @@ class TelegramCommandRouter(
         val sent = messageSender.sendText(
             chatId = chatId,
             text = receivedText,
-            replyMarkup = formatSelectionKeyboard(taskId),
+            replyMarkup = processingModeKeyboard(taskId),
             disableWebPagePreview = true
         )
 
@@ -532,9 +535,9 @@ class TelegramCommandRouter(
             text = """
                 Я получил ${session.sources.size} источников.
 
-                Выбери формат для всех:
+                Что ты хочешь получить для всех?
             """.trimIndent(),
-            replyMarkup = batchFormatSelectionKeyboard()
+            replyMarkup = batchProcessingModeKeyboard()
         )
     }
 
@@ -576,6 +579,36 @@ class TelegramCommandRouter(
         return true
     }
 
+    private fun handleBatchModeSelect(
+        context: CallbackContext,
+        data: String
+    ) {
+        val userId = context.userId
+        if (userId == null) {
+            render(context, "Batch не найден.", menuOnlyKeyboard())
+            return
+        }
+
+        val session = batchSessions[userId]
+        if (session == null || session.sources.isEmpty()) {
+            render(context, "Batch не найден или уже запущен.", menuOnlyKeyboard())
+            return
+        }
+
+        val processingMode = parseProcessingMode(data.substringAfter(":", "TRANSCRIPT"))
+        session.processingMode = processingMode
+
+        render(
+            context = context,
+            text = """
+                Режим: ${processingModeLabel(processingMode)}
+
+                Выбери формат для всех:
+            """.trimIndent(),
+            replyMarkup = batchFormatSelectionKeyboard(processingMode)
+        )
+    }
+
     private fun handleBatchFormatSelect(
         context: CallbackContext,
         data: String
@@ -593,7 +626,9 @@ class TelegramCommandRouter(
         }
 
         val formats = formatsFromSelection(data.substringAfter(":", "BOTH"))
+        val processingMode = session.processingMode
         var createdCount = 0
+        var skippedCount = 0
 
         session.sources.forEach { source ->
             val taskId = try {
@@ -601,6 +636,7 @@ class TelegramCommandRouter(
                     source.toCommand(
                         chatId = context.chatId,
                         userId = userId,
+                        processingMode = processingMode,
                         requestedFormats = formats.toSet()
                     ),
                     enforceActiveTaskLimit = false
@@ -608,10 +644,15 @@ class TelegramCommandRouter(
             } catch (ex: ActiveTaskLimitExceededException) {
                 log.warn("Active task limit reached while creating batch task userId={}", userId)
                 null
+            } catch (ex: Exception) {
+                log.warn("Failed to create batch task userId={}", userId, ex)
+                null
             }
 
             if (taskId != null) {
                 createdCount += 1
+            } else {
+                skippedCount += 1
             }
         }
 
@@ -619,6 +660,7 @@ class TelegramCommandRouter(
             context = context,
             text = """
                 Создано $createdCount задач.
+                Пропущено $skippedCount.
                 Я пришлю результаты по мере готовности.
             """.trimIndent(),
             replyMarkup = acceptedTaskKeyboard(),
@@ -626,7 +668,7 @@ class TelegramCommandRouter(
         )
     }
 
-    private fun handleFormatSelect(
+    private fun handleModeSelect(
         context: CallbackContext,
         data: String
     ) {
@@ -637,6 +679,37 @@ class TelegramCommandRouter(
         }
 
         val taskId = parseTaskId(parts[1])
+        val mode = parseProcessingMode(parts[2])
+
+        if (taskId == null) {
+            render(context, "Задача не найдена.", menuOnlyKeyboard())
+            return
+        }
+
+        render(
+            context = context,
+            text = """
+                Режим: ${processingModeLabel(mode)}
+
+                Выбери формат результата:
+            """.trimIndent(),
+            replyMarkup = formatSelectionKeyboard(taskId, mode)
+        )
+    }
+
+    private fun handleFormatSelect(
+        context: CallbackContext,
+        data: String
+    ) {
+        val parts = data.split(":")
+        if (parts.size != 3 && parts.size != 4) {
+            render(context, "Задача не найдена.", menuOnlyKeyboard())
+            return
+        }
+
+        val taskId = parseTaskId(parts[1])
+        val processingMode = if (parts.size == 4) parseProcessingMode(parts[2]) else ProcessingMode.TRANSCRIPT
+        val selection = if (parts.size == 4) parts[3] else parts[2]
         val userId = context.userId
 
         if (taskId == null || userId == null) {
@@ -648,13 +721,12 @@ class TelegramCommandRouter(
             taskService.updateProgressMessageId(taskId, context.messageId)
         }
 
-        val formats = formatsFromSelection(parts[2])
-
         val result = try {
             taskService.enqueueWaitingTask(
                 taskId = taskId,
                 telegramUserId = userId,
-                requestedFormats = formats
+                processingMode = processingMode,
+                requestedFormats = formatsFromSelection(selection)
             )
         } catch (ex: ActiveTaskLimitExceededException) {
             render(
@@ -700,7 +772,8 @@ class TelegramCommandRouter(
             text = """
                 Задача принята.
 
-                Формат: ${formatLabel(formats)}
+                Режим: ${processingModeLabel(processingMode)}
+                Формат: ${formatLabel(formatsFromSelection(selection))}
                 Статус: QUEUED
 
                 Я пришлю результат, когда обработка завершится.
@@ -965,7 +1038,7 @@ class TelegramCommandRouter(
         val sent = render(
             context = context,
             text = formatSelectionText(),
-            replyMarkup = formatSelectionKeyboard(newTaskId),
+            replyMarkup = processingModeKeyboard(newTaskId),
             disableWebPagePreview = true
         )
 
@@ -1072,7 +1145,7 @@ class TelegramCommandRouter(
             lines.add("")
         }
 
-        lines.add("Что сделать?")
+        lines.add("Что ты хочешь получить?")
 
         return lines.joinToString("\n")
     }
@@ -1305,13 +1378,7 @@ class TelegramCommandRouter(
         val downloadButtons = mutableListOf<Map<String, String>>()
 
         if (task.status == TranscriptionStatus.WAITING_FORMAT) {
-            rows.add(
-                listOf(
-                    button("📄 TXT", "$CALLBACK_FORMAT_SELECT:${task.id}:TXT"),
-                    button("📝 Markdown", "$CALLBACK_FORMAT_SELECT:${task.id}:MD")
-                )
-            )
-            rows.add(listOf(button("📄 + 📝 Оба", "$CALLBACK_FORMAT_SELECT:${task.id}:BOTH")))
+            rows.addAll((processingModeKeyboard(task.id)["inline_keyboard"] as List<List<Map<String, String>>>))
             rows.add(listOf(button("Отмена", "$CALLBACK_FORMAT_CANCEL:${task.id}")))
         }
 
@@ -1321,6 +1388,10 @@ class TelegramCommandRouter(
 
         if (fileAvailability.hasMd) {
             downloadButtons.add(button("📝 MD", "$CALLBACK_GET_MD:${task.id}"))
+        }
+
+        if (fileAvailability.hasPrompt || fileAvailability.hasPackage) {
+            downloadButtons.add(button("📦 LLM файлы", "$CALLBACK_GET_RESULT:${task.id}"))
         }
 
         if (downloadButtons.isNotEmpty()) {
@@ -1363,13 +1434,14 @@ class TelegramCommandRouter(
         )
     }
 
-    private fun formatSelectionKeyboard(taskId: UUID): Map<String, Any> {
+    private fun processingModeKeyboard(taskId: UUID): Map<String, Any> {
         return inlineKeyboard(
-            listOf(
-                button("📄 TXT", "$CALLBACK_FORMAT_SELECT:$taskId:TXT"),
-                button("📝 Markdown", "$CALLBACK_FORMAT_SELECT:$taskId:MD")
-            ),
-            listOf(button("📄 + 📝 Оба", "$CALLBACK_FORMAT_SELECT:$taskId:BOTH")),
+            listOf(button("📄 Transcript", "$CALLBACK_MODE_SELECT:$taskId:${ProcessingMode.TRANSCRIPT.name}")),
+            listOf(button("🧠 Summary", "$CALLBACK_MODE_SELECT:$taskId:${ProcessingMode.SUMMARY.name}")),
+            listOf(button("✅ Action items", "$CALLBACK_MODE_SELECT:$taskId:${ProcessingMode.ACTION_ITEMS.name}")),
+            listOf(button("📚 Study notes", "$CALLBACK_MODE_SELECT:$taskId:${ProcessingMode.STUDY_NOTES.name}")),
+            listOf(button("💻 Tech tasks", "$CALLBACK_MODE_SELECT:$taskId:${ProcessingMode.TECH_TASKS.name}")),
+            listOf(button("📝 Content repurpose", "$CALLBACK_MODE_SELECT:$taskId:${ProcessingMode.CONTENT_REPURPOSE.name}")),
             listOf(
                 button("Отмена", "$CALLBACK_FORMAT_CANCEL:$taskId"),
                 button("🏠 Меню", CALLBACK_MENU)
@@ -1377,13 +1449,61 @@ class TelegramCommandRouter(
         )
     }
 
-    private fun batchFormatSelectionKeyboard(): Map<String, Any> {
+    private fun formatSelectionKeyboard(taskId: UUID, processingMode: ProcessingMode): Map<String, Any> {
+        val prefix = "$CALLBACK_FORMAT_SELECT:$taskId:${processingMode.name}"
+        if (processingMode != ProcessingMode.TRANSCRIPT) {
+            return inlineKeyboard(
+                listOf(button("📝 Markdown", "$prefix:MD")),
+                listOf(button("📦 LLM Package", "$prefix:PACKAGE")),
+                listOf(
+                    button("Отмена", "$CALLBACK_FORMAT_CANCEL:$taskId"),
+                    button("🏠 Меню", CALLBACK_MENU)
+                )
+            )
+        }
+
+        return inlineKeyboard(
+            listOf(
+                button("📄 TXT", "$prefix:TXT"),
+                button("📝 Markdown", "$prefix:MD")
+            ),
+            listOf(button("📄 + 📝 Оба", "$prefix:BOTH")),
+            listOf(button("📦 LLM Package", "$prefix:PACKAGE")),
+            listOf(
+                button("Отмена", "$CALLBACK_FORMAT_CANCEL:$taskId"),
+                button("🏠 Меню", CALLBACK_MENU)
+            )
+        )
+    }
+
+    private fun batchProcessingModeKeyboard(): Map<String, Any> {
+        return inlineKeyboard(
+            listOf(button("📄 Transcript", "$CALLBACK_BATCH_MODE_SELECT:${ProcessingMode.TRANSCRIPT.name}")),
+            listOf(button("🧠 Summary", "$CALLBACK_BATCH_MODE_SELECT:${ProcessingMode.SUMMARY.name}")),
+            listOf(button("✅ Action items", "$CALLBACK_BATCH_MODE_SELECT:${ProcessingMode.ACTION_ITEMS.name}")),
+            listOf(button("📚 Study notes", "$CALLBACK_BATCH_MODE_SELECT:${ProcessingMode.STUDY_NOTES.name}")),
+            listOf(button("💻 Tech tasks", "$CALLBACK_BATCH_MODE_SELECT:${ProcessingMode.TECH_TASKS.name}")),
+            listOf(button("📝 Content repurpose", "$CALLBACK_BATCH_MODE_SELECT:${ProcessingMode.CONTENT_REPURPOSE.name}")),
+            listOf(button("🏠 Меню", CALLBACK_MENU))
+        )
+    }
+
+    private fun batchFormatSelectionKeyboard(processingMode: ProcessingMode): Map<String, Any> {
+        if (processingMode != ProcessingMode.TRANSCRIPT) {
+            return inlineKeyboard(
+                listOf(button("📝 Markdown", "$CALLBACK_BATCH_FORMAT_SELECT:MD")),
+                listOf(button("📦 LLM Package", "$CALLBACK_BATCH_FORMAT_SELECT:PACKAGE")),
+                listOf(button("🏠 Меню", CALLBACK_MENU))
+            )
+        }
+
         return inlineKeyboard(
             listOf(
                 button("📄 TXT", "$CALLBACK_BATCH_FORMAT_SELECT:TXT"),
                 button("📝 Markdown", "$CALLBACK_BATCH_FORMAT_SELECT:MD")
             ),
             listOf(button("📄 + 📝 Оба", "$CALLBACK_BATCH_FORMAT_SELECT:BOTH")),
+            listOf(button("📦 LLM Package", "$CALLBACK_BATCH_FORMAT_SELECT:PACKAGE")),
             listOf(button("🏠 Меню", CALLBACK_MENU))
         )
     }
@@ -1472,6 +1592,28 @@ class TelegramCommandRouter(
             )
         }
 
+        val promptPath = task.resultPromptPath
+        if (fileType == ResultFileType.ALL && !promptPath.isNullOrBlank()) {
+            files.add(
+                ResultFile(
+                    path = Path.of(promptPath),
+                    caption = "📋 LLM prompt",
+                    artifactType = ArtifactType.PROMPT
+                )
+            )
+        }
+
+        val packagePath = task.resultPackagePath
+        if (fileType == ResultFileType.ALL && !packagePath.isNullOrBlank()) {
+            files.add(
+                ResultFile(
+                    path = Path.of(packagePath),
+                    caption = "📦 LLM Package",
+                    artifactType = ArtifactType.PACKAGE
+                )
+            )
+        }
+
         return files
     }
 
@@ -1508,22 +1650,32 @@ class TelegramCommandRouter(
     private fun fileAvailability(task: TranscriptionTask): FileAvailability {
         val hasTxt = pathExists(task.resultTxtPath)
         val hasMd = pathExists(task.resultMdPath)
+        val hasPrompt = pathExists(task.resultPromptPath)
+        val hasPackage = pathExists(task.resultPackagePath)
+        val labels = mutableListOf<String>()
+        if (hasTxt) labels.add("TXT")
+        if (hasMd) labels.add("MD")
+        if (hasPrompt) labels.add("Prompt")
+        if (hasPackage) labels.add("Package")
         val shortLabel = when {
-            hasTxt && hasMd -> "TXT, MD"
-            hasTxt -> "TXT"
-            hasMd -> "MD"
+            labels.isNotEmpty() -> labels.joinToString(", ")
             else -> "нет"
         }
 
         return FileAvailability(
             hasTxt = hasTxt,
             hasMd = hasMd,
+            hasPrompt = hasPrompt,
+            hasPackage = hasPackage,
             shortLabel = shortLabel
         )
     }
 
     private fun hasStoredFilePaths(task: TranscriptionTask): Boolean {
-        return !task.resultTxtPath.isNullOrBlank() || !task.resultMdPath.isNullOrBlank()
+        return !task.resultTxtPath.isNullOrBlank() ||
+                !task.resultMdPath.isNullOrBlank() ||
+                !task.resultPromptPath.isNullOrBlank() ||
+                !task.resultPackagePath.isNullOrBlank()
     }
 
     private fun pathExists(path: String?): Boolean {
@@ -1659,6 +1811,7 @@ class TelegramCommandRouter(
         return when (selection.uppercase()) {
             "TXT" -> listOf("TXT")
             "MD" -> listOf("MD")
+            "PACKAGE" -> listOf("PACKAGE")
             "BOTH" -> listOf("TXT", "MD")
             else -> listOf("TXT", "MD")
         }
@@ -1668,7 +1821,24 @@ class TelegramCommandRouter(
         return when (formats.map { it.uppercase() }.toSet()) {
             setOf("TXT") -> "TXT"
             setOf("MD") -> "Markdown"
+            setOf("PACKAGE") -> "LLM Package"
             else -> "TXT и Markdown"
+        }
+    }
+
+    private fun parseProcessingMode(value: String): ProcessingMode {
+        return runCatching { ProcessingMode.valueOf(value.trim().uppercase()) }
+            .getOrDefault(ProcessingMode.TRANSCRIPT)
+    }
+
+    private fun processingModeLabel(mode: ProcessingMode): String {
+        return when (mode) {
+            ProcessingMode.TRANSCRIPT -> "📄 Transcript"
+            ProcessingMode.SUMMARY -> "🧠 Summary"
+            ProcessingMode.ACTION_ITEMS -> "✅ Action items"
+            ProcessingMode.STUDY_NOTES -> "📚 Study notes"
+            ProcessingMode.TECH_TASKS -> "💻 Tech tasks"
+            ProcessingMode.CONTENT_REPURPOSE -> "📝 Content repurpose"
         }
     }
 
@@ -1698,6 +1868,16 @@ class TelegramCommandRouter(
         )
     }
 
+    private fun urlButton(
+        text: String,
+        url: String
+    ): Map<String, String> {
+        return mapOf(
+            "text" to text,
+            "url" to url
+        )
+    }
+
     private data class CallbackContext(
         val chatId: Long,
         val messageId: Long?,
@@ -1713,9 +1893,11 @@ class TelegramCommandRouter(
     private data class FileAvailability(
         val hasTxt: Boolean,
         val hasMd: Boolean,
+        val hasPrompt: Boolean,
+        val hasPackage: Boolean,
         val shortLabel: String
     ) {
-        val hasAny: Boolean = hasTxt || hasMd
+        val hasAny: Boolean = hasTxt || hasMd || hasPrompt || hasPackage
     }
 
     private data class PendingTranscriptionSource(
@@ -1732,6 +1914,7 @@ class TelegramCommandRouter(
         fun toCommand(
             chatId: Long,
             userId: Long,
+            processingMode: ProcessingMode = ProcessingMode.TRANSCRIPT,
             requestedFormats: Set<String> = setOf("TXT", "MD")
         ): CreateTranscriptionTaskCommand {
             return CreateTranscriptionTaskCommand(
@@ -1744,6 +1927,7 @@ class TelegramCommandRouter(
                 originalFileName = originalFileName,
                 mimeType = mimeType,
                 fileSizeBytes = fileSizeBytes,
+                processingMode = processingMode,
                 requestedFormats = requestedFormats
             )
         }
@@ -1779,7 +1963,8 @@ class TelegramCommandRouter(
     }
 
     private data class BatchSession(
-        val sources: MutableList<PendingTranscriptionSource> = mutableListOf()
+        val sources: MutableList<PendingTranscriptionSource> = mutableListOf(),
+        var processingMode: ProcessingMode = ProcessingMode.TRANSCRIPT
     )
 
     private enum class ResultFileType {
@@ -1815,8 +2000,10 @@ class TelegramCommandRouter(
         const val CALLBACK_OLD_DELETE_TASK_CONFIRM = "delete_task_confirm"
         const val CALLBACK_OLD_DELETE_TASK_CANCEL = "delete_task_cancel"
         const val CALLBACK_REPEAT_TASK = "repeat_task"
+        const val CALLBACK_MODE_SELECT = "mode_select"
         const val CALLBACK_FORMAT_SELECT = "format_select"
         const val CALLBACK_FORMAT_CANCEL = "format_cancel"
+        const val CALLBACK_BATCH_MODE_SELECT = "batch_mode_select"
         const val CALLBACK_BATCH_FORMAT_SELECT = "batch_format_select"
         const val CAPTION_TITLE_LIMIT = 120
 

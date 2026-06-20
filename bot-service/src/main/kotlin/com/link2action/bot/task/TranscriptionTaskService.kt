@@ -49,6 +49,7 @@ class TranscriptionTaskService(
             fileSizeBytes = command.fileSizeBytes,
             status = TranscriptionStatus.WAITING_FORMAT,
             requestedFormat = "PENDING",
+            processingMode = command.processingMode,
             language = command.language,
             createdAt = now,
             updatedAt = now
@@ -81,6 +82,7 @@ class TranscriptionTaskService(
             telegramFileUniqueId = command.telegramFileUniqueId,
             telegramFileId = command.telegramFileId,
             requestedFormat = formats.joinToString(","),
+            processingMode = command.processingMode,
             language = command.language
         )
         val existingTask = findActiveTaskByIdempotencyKey(idempotencyKey)
@@ -115,6 +117,7 @@ class TranscriptionTaskService(
             fileSizeBytes = command.fileSizeBytes,
             status = TranscriptionStatus.QUEUED,
             requestedFormat = formats.joinToString(","),
+            processingMode = command.processingMode,
             language = command.language,
             idempotencyKey = idempotencyKey,
             createdAt = now,
@@ -133,6 +136,7 @@ class TranscriptionTaskService(
             originalFileName = task.originalFileName,
             mimeType = task.mimeType,
             fileSizeBytes = task.fileSizeBytes,
+            processingMode = task.processingMode,
             language = task.language,
             formats = formats,
             createdAt = task.createdAt
@@ -154,6 +158,7 @@ class TranscriptionTaskService(
     fun enqueueWaitingTask(
         taskId: UUID,
         telegramUserId: Long,
+        processingMode: ProcessingMode,
         requestedFormats: Collection<String>
     ): FormatSelectionResult? {
         val task = repository.findByIdAndTelegramUserIdAndDeletedAtIsNull(
@@ -177,6 +182,7 @@ class TranscriptionTaskService(
             telegramFileUniqueId = task.telegramFileUniqueId,
             telegramFileId = task.telegramFileId,
             requestedFormat = formats.joinToString(","),
+            processingMode = processingMode,
             language = task.language
         )
         val existingTask = findActiveTaskByIdempotencyKey(idempotencyKey)
@@ -204,6 +210,7 @@ class TranscriptionTaskService(
         val now = clockProvider.now()
         task.markQueued(
             requestedFormats = formats,
+            processingMode = processingMode,
             idempotencyKey = idempotencyKey,
             now = now
         )
@@ -329,6 +336,7 @@ class TranscriptionTaskService(
                 originalFileName = sourceTask.originalFileName,
                 mimeType = sourceTask.mimeType,
                 fileSizeBytes = sourceTask.fileSizeBytes,
+                processingMode = sourceTask.processingMode,
                 language = sourceTask.language
             )
         )
@@ -338,6 +346,8 @@ class TranscriptionTaskService(
     fun clearTaskResultPaths(task: TranscriptionTask) {
         task.resultTxtPath = null
         task.resultMdPath = null
+        task.resultPromptPath = null
+        task.resultPackagePath = null
         task.updatedAt = clockProvider.now()
     }
 
@@ -377,6 +387,8 @@ class TranscriptionTaskService(
         taskId: UUID,
         resultTxtPath: String?,
         resultMdPath: String?,
+        resultPromptPath: String? = null,
+        resultPackagePath: String? = null,
         title: String? = null,
         durationSeconds: Long? = null,
         detectedLanguage: String? = null
@@ -397,6 +409,8 @@ class TranscriptionTaskService(
         task.markCompleted(
             resultTxtPath = resultTxtPath,
             resultMdPath = resultMdPath,
+            resultPromptPath = resultPromptPath,
+            resultPackagePath = resultPackagePath,
             title = title,
             durationSeconds = durationSeconds,
             detectedLanguage = detectedLanguage,
@@ -517,6 +531,7 @@ class TranscriptionTaskService(
             originalFileName = task.originalFileName,
             mimeType = task.mimeType,
             fileSizeBytes = task.fileSizeBytes,
+            processingMode = task.processingMode,
             language = task.language,
             formats = requestedFormats.toList(),
             createdAt = task.createdAt
@@ -528,7 +543,7 @@ class TranscriptionTaskService(
     private fun normalizeFormats(requestedFormats: Collection<String>): List<String> {
         val formats = requestedFormats
             .map { it.trim().uppercase() }
-            .filter { it == "TXT" || it == "MD" }
+            .filter { it == "TXT" || it == "MD" || it == "PACKAGE" }
             .distinct()
             .sortedBy { FORMAT_ORDER[it] ?: Int.MAX_VALUE }
 
@@ -557,10 +572,11 @@ class TranscriptionTaskService(
         telegramUserId: Long,
         sourceType: TranscriptionSourceType,
         sourceUrl: String?,
-        telegramFileUniqueId: String?,
-        telegramFileId: String?,
-        requestedFormat: String,
-        language: String?
+            telegramFileUniqueId: String?,
+            telegramFileId: String?,
+            requestedFormat: String,
+            processingMode: ProcessingMode,
+            language: String?
     ): String {
         val sourceIdentity = when (sourceType) {
             TranscriptionSourceType.URL -> sourceUrl?.trim().orEmpty()
@@ -573,6 +589,7 @@ class TranscriptionTaskService(
             telegramUserId.toString(),
             sourceType.name,
             sourceIdentity,
+            processingMode.name,
             requestedFormat.trim().uppercase(),
             language?.trim()?.lowercase().orEmpty()
         ).joinToString("|")
@@ -640,5 +657,6 @@ data class FormatCancelResult(
 
 private val FORMAT_ORDER = mapOf(
     "TXT" to 0,
-    "MD" to 1
+    "MD" to 1,
+    "PACKAGE" to 2
 )

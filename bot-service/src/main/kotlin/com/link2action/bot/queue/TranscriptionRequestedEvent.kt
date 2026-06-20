@@ -1,6 +1,7 @@
 package com.link2action.bot.queue
 
 import com.link2action.bot.task.TranscriptionSourceType
+import com.link2action.bot.task.ProcessingMode
 import java.time.Instant
 import java.util.UUID
 
@@ -13,6 +14,7 @@ data class TranscriptionRequestedEvent(
     val originalFileName: String? = null,
     val mimeType: String? = null,
     val fileSizeBytes: Long? = null,
+    val processingMode: ProcessingMode = ProcessingMode.TRANSCRIPT,
     val language: String?,
     val formats: List<String>,
     val createdAt: Instant

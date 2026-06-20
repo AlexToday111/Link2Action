@@ -52,6 +52,10 @@ open class TranscriptionTask(
     @Column(name = "requested_format", nullable = false, length = 32)
     open var requestedFormat: String,
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "processing_mode", nullable = false, length = 32)
+    open var processingMode: ProcessingMode = ProcessingMode.TRANSCRIPT,
+
     @Column(name = "language", length = 16)
     open var language: String? = null,
 
@@ -76,6 +80,12 @@ open class TranscriptionTask(
     @Column(name = "result_md_path", columnDefinition = "text")
     open var resultMdPath: String? = null,
 
+    @Column(name = "result_prompt_path", columnDefinition = "text")
+    open var resultPromptPath: String? = null,
+
+    @Column(name = "result_package_path", columnDefinition = "text")
+    open var resultPackagePath: String? = null,
+
     @Column(name = "error_message", columnDefinition = "text")
     open var errorMessage: String? = null,
 
@@ -97,11 +107,13 @@ open class TranscriptionTask(
 
     fun markQueued(
         requestedFormats: Collection<String>,
+        processingMode: ProcessingMode,
         idempotencyKey: String,
         now: Instant
     ) {
         status = TranscriptionStatus.QUEUED
         requestedFormat = requestedFormats.joinToString(",")
+        this.processingMode = processingMode
         this.idempotencyKey = idempotencyKey
         updatedAt = now
     }
@@ -115,6 +127,8 @@ open class TranscriptionTask(
     fun markCompleted(
         resultTxtPath: String?,
         resultMdPath: String?,
+        resultPromptPath: String?,
+        resultPackagePath: String?,
         title: String?,
         durationSeconds: Long?,
         detectedLanguage: String?,
@@ -123,6 +137,8 @@ open class TranscriptionTask(
         status = TranscriptionStatus.COMPLETED
         this.resultTxtPath = resultTxtPath
         this.resultMdPath = resultMdPath
+        this.resultPromptPath = resultPromptPath
+        this.resultPackagePath = resultPackagePath
         this.title = title ?: this.title
         this.durationSeconds = durationSeconds ?: this.durationSeconds
         this.language = detectedLanguage ?: this.language

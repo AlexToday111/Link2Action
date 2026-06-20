@@ -11,6 +11,8 @@ data class TranscriptionResultEvent(
     val language: String? = null,
     val resultTxtPath: String? = null,
     val resultMdPath: String? = null,
+    val resultPromptPath: String? = null,
+    val resultPackagePath: String? = null,
     val errorMessage: String? = null,
     val completedAt: Instant? = null
 )

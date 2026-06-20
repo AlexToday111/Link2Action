@@ -11,5 +11,6 @@ data class CreateTranscriptionTaskCommand(
     val mimeType: String? = null,
     val fileSizeBytes: Long? = null,
     val language: String? = null,
+    val processingMode: ProcessingMode = ProcessingMode.TRANSCRIPT,
     val requestedFormats: Set<String> = setOf("TXT", "MD")
 )

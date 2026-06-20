@@ -82,7 +82,12 @@ class StorageCleanupService(
         var cleanedTasksCount = 0
 
         for (task in tasks) {
-            val paths = listOfNotNull(task.resultTxtPath, task.resultMdPath)
+            val paths = listOfNotNull(
+                task.resultTxtPath,
+                task.resultMdPath,
+                task.resultPromptPath,
+                task.resultPackagePath
+            )
 
             if (paths.isEmpty()) {
                 continue
@@ -112,6 +117,8 @@ class StorageCleanupService(
 
             task.resultTxtPath = null
             task.resultMdPath = null
+            task.resultPromptPath = null
+            task.resultPackagePath = null
             task.updatedAt = now
             cleanedTasksCount += 1
         }

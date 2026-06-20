@@ -7,7 +7,8 @@ class AppProperties (
     val telegram: Telegram,
     val rabbit: Rabbit,
     val storage: Storage,
-    val transcription: Transcription
+    val transcription: Transcription,
+    val llmLauncher: LlmLauncher = LlmLauncher()
 ){
     data class Telegram (
         val botToken: String,
@@ -38,5 +39,13 @@ class AppProperties (
     data class Transcription (
         val maxActiveTasksPerUser: Int = 1,
         val maxBatchSize: Int = 5
+    )
+
+    data class LlmLauncher(
+        val enabled: Boolean = true,
+        val chatgptUrl: String = "https://chatgpt.com/",
+        val claudeUrl: String = "https://claude.ai/",
+        val geminiUrl: String = "https://gemini.google.com/",
+        val perplexityUrl: String = "https://www.perplexity.ai/"
     )
 }

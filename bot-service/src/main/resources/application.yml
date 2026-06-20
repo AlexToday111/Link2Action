@@ -65,6 +65,13 @@ app:
     max-active-tasks-per-user: ${MAX_ACTIVE_TASKS_PER_USER:1}
     max-batch-size: ${MAX_BATCH_SIZE:5}
 
+  llm-launcher:
+    enabled: ${LLM_LAUNCHER_ENABLED:true}
+    chatgpt-url: ${LLM_CHATGPT_URL:https://chatgpt.com/}
+    claude-url: ${LLM_CLAUDE_URL:https://claude.ai/}
+    gemini-url: ${LLM_GEMINI_URL:https://gemini.google.com/}
+    perplexity-url: ${LLM_PERPLEXITY_URL:https://www.perplexity.ai/}
+
 logging:
   level:
     root: INFO
