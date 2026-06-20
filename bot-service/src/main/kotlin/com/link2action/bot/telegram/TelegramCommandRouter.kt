@@ -137,10 +137,14 @@ class TelegramCommandRouter(
                 data.startsWith("$CALLBACK_OLD_DELETE_TASK_CONFIRM:") -> handleDeleteFilesConfirm(context, data)
                 data.startsWith("$CALLBACK_OLD_DELETE_TASK_CANCEL:") -> showTaskDetail(context, data, fallbackToHistory = true)
                 data.startsWith("$CALLBACK_REPEAT_TASK:") -> handleRepeatTask(context, data)
+                data.startsWith("$CALLBACK_MODE_SELECT_SHORT:") -> handleModeSelect(context, data)
                 data.startsWith("$CALLBACK_MODE_SELECT:") -> handleModeSelect(context, data)
+                data.startsWith("$CALLBACK_FORMAT_SELECT_SHORT:") -> handleFormatSelect(context, data)
                 data.startsWith("$CALLBACK_FORMAT_SELECT:") -> handleFormatSelect(context, data)
                 data.startsWith("$CALLBACK_FORMAT_CANCEL:") -> handleFormatCancel(context, data)
+                data.startsWith("$CALLBACK_BATCH_MODE_SELECT_SHORT:") -> handleBatchModeSelect(context, data)
                 data.startsWith("$CALLBACK_BATCH_MODE_SELECT:") -> handleBatchModeSelect(context, data)
+                data.startsWith("$CALLBACK_BATCH_FORMAT_SELECT_SHORT:") -> handleBatchFormatSelect(context, data)
                 data.startsWith("$CALLBACK_BATCH_FORMAT_SELECT:") -> handleBatchFormatSelect(context, data)
                 else -> {
                     log.warn(
@@ -1446,21 +1450,21 @@ class TelegramCommandRouter(
 
     private fun processingModeRows(taskId: UUID): List<List<Map<String, String>>> {
         return listOf(
-            listOf(button("📄 Transcript", "$CALLBACK_MODE_SELECT:$taskId:${ProcessingMode.TRANSCRIPT.name}")),
-            listOf(button("🧠 Summary", "$CALLBACK_MODE_SELECT:$taskId:${ProcessingMode.SUMMARY.name}")),
-            listOf(button("✅ Action items", "$CALLBACK_MODE_SELECT:$taskId:${ProcessingMode.ACTION_ITEMS.name}")),
-            listOf(button("📚 Study notes", "$CALLBACK_MODE_SELECT:$taskId:${ProcessingMode.STUDY_NOTES.name}")),
-            listOf(button("💻 Tech tasks", "$CALLBACK_MODE_SELECT:$taskId:${ProcessingMode.TECH_TASKS.name}")),
-            listOf(button("📝 Content repurpose", "$CALLBACK_MODE_SELECT:$taskId:${ProcessingMode.CONTENT_REPURPOSE.name}"))
+            listOf(button("📄 Transcript", "$CALLBACK_MODE_SELECT_SHORT:$taskId:${processingModeCode(ProcessingMode.TRANSCRIPT)}")),
+            listOf(button("🧠 Summary", "$CALLBACK_MODE_SELECT_SHORT:$taskId:${processingModeCode(ProcessingMode.SUMMARY)}")),
+            listOf(button("✅ Action items", "$CALLBACK_MODE_SELECT_SHORT:$taskId:${processingModeCode(ProcessingMode.ACTION_ITEMS)}")),
+            listOf(button("📚 Study notes", "$CALLBACK_MODE_SELECT_SHORT:$taskId:${processingModeCode(ProcessingMode.STUDY_NOTES)}")),
+            listOf(button("💻 Tech tasks", "$CALLBACK_MODE_SELECT_SHORT:$taskId:${processingModeCode(ProcessingMode.TECH_TASKS)}")),
+            listOf(button("📝 Content repurpose", "$CALLBACK_MODE_SELECT_SHORT:$taskId:${processingModeCode(ProcessingMode.CONTENT_REPURPOSE)}"))
         )
     }
 
     private fun formatSelectionKeyboard(taskId: UUID, processingMode: ProcessingMode): Map<String, Any> {
-        val prefix = "$CALLBACK_FORMAT_SELECT:$taskId:${processingMode.name}"
+        val prefix = "$CALLBACK_FORMAT_SELECT_SHORT:$taskId:${processingModeCode(processingMode)}"
         if (processingMode != ProcessingMode.TRANSCRIPT) {
             return inlineKeyboard(
                 listOf(button("📝 Markdown", "$prefix:MD")),
-                listOf(button("📦 LLM Package", "$prefix:PACKAGE")),
+                listOf(button("📦 LLM Package", "$prefix:PKG")),
                 listOf(
                     button("Отмена", "$CALLBACK_FORMAT_CANCEL:$taskId"),
                     button("🏠 Меню", CALLBACK_MENU)
@@ -1474,7 +1478,7 @@ class TelegramCommandRouter(
                 button("📝 Markdown", "$prefix:MD")
             ),
             listOf(button("📄 + 📝 Оба", "$prefix:BOTH")),
-            listOf(button("📦 LLM Package", "$prefix:PACKAGE")),
+            listOf(button("📦 LLM Package", "$prefix:PKG")),
             listOf(
                 button("Отмена", "$CALLBACK_FORMAT_CANCEL:$taskId"),
                 button("🏠 Меню", CALLBACK_MENU)
@@ -1484,12 +1488,12 @@ class TelegramCommandRouter(
 
     private fun batchProcessingModeKeyboard(): Map<String, Any> {
         return inlineKeyboard(
-            listOf(button("📄 Transcript", "$CALLBACK_BATCH_MODE_SELECT:${ProcessingMode.TRANSCRIPT.name}")),
-            listOf(button("🧠 Summary", "$CALLBACK_BATCH_MODE_SELECT:${ProcessingMode.SUMMARY.name}")),
-            listOf(button("✅ Action items", "$CALLBACK_BATCH_MODE_SELECT:${ProcessingMode.ACTION_ITEMS.name}")),
-            listOf(button("📚 Study notes", "$CALLBACK_BATCH_MODE_SELECT:${ProcessingMode.STUDY_NOTES.name}")),
-            listOf(button("💻 Tech tasks", "$CALLBACK_BATCH_MODE_SELECT:${ProcessingMode.TECH_TASKS.name}")),
-            listOf(button("📝 Content repurpose", "$CALLBACK_BATCH_MODE_SELECT:${ProcessingMode.CONTENT_REPURPOSE.name}")),
+            listOf(button("📄 Transcript", "$CALLBACK_BATCH_MODE_SELECT_SHORT:${processingModeCode(ProcessingMode.TRANSCRIPT)}")),
+            listOf(button("🧠 Summary", "$CALLBACK_BATCH_MODE_SELECT_SHORT:${processingModeCode(ProcessingMode.SUMMARY)}")),
+            listOf(button("✅ Action items", "$CALLBACK_BATCH_MODE_SELECT_SHORT:${processingModeCode(ProcessingMode.ACTION_ITEMS)}")),
+            listOf(button("📚 Study notes", "$CALLBACK_BATCH_MODE_SELECT_SHORT:${processingModeCode(ProcessingMode.STUDY_NOTES)}")),
+            listOf(button("💻 Tech tasks", "$CALLBACK_BATCH_MODE_SELECT_SHORT:${processingModeCode(ProcessingMode.TECH_TASKS)}")),
+            listOf(button("📝 Content repurpose", "$CALLBACK_BATCH_MODE_SELECT_SHORT:${processingModeCode(ProcessingMode.CONTENT_REPURPOSE)}")),
             listOf(button("🏠 Меню", CALLBACK_MENU))
         )
     }
@@ -1497,19 +1501,19 @@ class TelegramCommandRouter(
     private fun batchFormatSelectionKeyboard(processingMode: ProcessingMode): Map<String, Any> {
         if (processingMode != ProcessingMode.TRANSCRIPT) {
             return inlineKeyboard(
-                listOf(button("📝 Markdown", "$CALLBACK_BATCH_FORMAT_SELECT:MD")),
-                listOf(button("📦 LLM Package", "$CALLBACK_BATCH_FORMAT_SELECT:PACKAGE")),
+                listOf(button("📝 Markdown", "$CALLBACK_BATCH_FORMAT_SELECT_SHORT:MD")),
+                listOf(button("📦 LLM Package", "$CALLBACK_BATCH_FORMAT_SELECT_SHORT:PKG")),
                 listOf(button("🏠 Меню", CALLBACK_MENU))
             )
         }
 
         return inlineKeyboard(
             listOf(
-                button("📄 TXT", "$CALLBACK_BATCH_FORMAT_SELECT:TXT"),
-                button("📝 Markdown", "$CALLBACK_BATCH_FORMAT_SELECT:MD")
+                button("📄 TXT", "$CALLBACK_BATCH_FORMAT_SELECT_SHORT:TXT"),
+                button("📝 Markdown", "$CALLBACK_BATCH_FORMAT_SELECT_SHORT:MD")
             ),
-            listOf(button("📄 + 📝 Оба", "$CALLBACK_BATCH_FORMAT_SELECT:BOTH")),
-            listOf(button("📦 LLM Package", "$CALLBACK_BATCH_FORMAT_SELECT:PACKAGE")),
+            listOf(button("📄 + 📝 Оба", "$CALLBACK_BATCH_FORMAT_SELECT_SHORT:BOTH")),
+            listOf(button("📦 LLM Package", "$CALLBACK_BATCH_FORMAT_SELECT_SHORT:PKG")),
             listOf(button("🏠 Меню", CALLBACK_MENU))
         )
     }
@@ -1817,6 +1821,7 @@ class TelegramCommandRouter(
         return when (selection.uppercase()) {
             "TXT" -> listOf("TXT")
             "MD" -> listOf("MD")
+            "PKG" -> listOf("PACKAGE")
             "PACKAGE" -> listOf("PACKAGE")
             "BOTH" -> listOf("TXT", "MD")
             else -> listOf("TXT", "MD")
@@ -1833,8 +1838,27 @@ class TelegramCommandRouter(
     }
 
     private fun parseProcessingMode(value: String): ProcessingMode {
-        return runCatching { ProcessingMode.valueOf(value.trim().uppercase()) }
-            .getOrDefault(ProcessingMode.TRANSCRIPT)
+        return when (value.trim().uppercase()) {
+            "TR" -> ProcessingMode.TRANSCRIPT
+            "SM" -> ProcessingMode.SUMMARY
+            "AI" -> ProcessingMode.ACTION_ITEMS
+            "SN" -> ProcessingMode.STUDY_NOTES
+            "TT" -> ProcessingMode.TECH_TASKS
+            "CR" -> ProcessingMode.CONTENT_REPURPOSE
+            else -> runCatching { ProcessingMode.valueOf(value.trim().uppercase()) }
+                .getOrDefault(ProcessingMode.TRANSCRIPT)
+        }
+    }
+
+    private fun processingModeCode(mode: ProcessingMode): String {
+        return when (mode) {
+            ProcessingMode.TRANSCRIPT -> "TR"
+            ProcessingMode.SUMMARY -> "SM"
+            ProcessingMode.ACTION_ITEMS -> "AI"
+            ProcessingMode.STUDY_NOTES -> "SN"
+            ProcessingMode.TECH_TASKS -> "TT"
+            ProcessingMode.CONTENT_REPURPOSE -> "CR"
+        }
     }
 
     private fun processingModeLabel(mode: ProcessingMode): String {
@@ -2006,10 +2030,14 @@ class TelegramCommandRouter(
         const val CALLBACK_OLD_DELETE_TASK_CONFIRM = "delete_task_confirm"
         const val CALLBACK_OLD_DELETE_TASK_CANCEL = "delete_task_cancel"
         const val CALLBACK_REPEAT_TASK = "repeat_task"
+        const val CALLBACK_MODE_SELECT_SHORT = "m"
         const val CALLBACK_MODE_SELECT = "mode_select"
+        const val CALLBACK_FORMAT_SELECT_SHORT = "f"
         const val CALLBACK_FORMAT_SELECT = "format_select"
         const val CALLBACK_FORMAT_CANCEL = "format_cancel"
+        const val CALLBACK_BATCH_MODE_SELECT_SHORT = "bm"
         const val CALLBACK_BATCH_MODE_SELECT = "batch_mode_select"
+        const val CALLBACK_BATCH_FORMAT_SELECT_SHORT = "bf"
         const val CALLBACK_BATCH_FORMAT_SELECT = "batch_format_select"
         const val CAPTION_TITLE_LIMIT = 120
 

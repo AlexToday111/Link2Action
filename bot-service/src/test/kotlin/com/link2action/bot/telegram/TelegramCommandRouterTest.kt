@@ -14,6 +14,7 @@ import org.mockito.Mockito
 import java.util.UUID
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class TelegramCommandRouterTest {
 
@@ -53,9 +54,43 @@ class TelegramCommandRouterTest {
         Mockito.verify(messageSender).sendText(
             ArgumentMatchers.eq(CHAT_ID),
             ArgumentMatchers.contains("Ссылка получена"),
-            ArgumentMatchers.argThat { markup -> markup.toString().contains("mode_select") },
+            ArgumentMatchers.argThat { markup -> markup.toString().contains("callback_data=m:") },
             ArgumentMatchers.eq(true)
         )
+    }
+
+    @Test
+    fun `processing mode keyboard callback data fits Telegram limit`() {
+        router.route(message(text = "https://youtu.be/example"))
+
+        val callbackData = sentReplyMarkupCallbackData()
+
+        assertTrue(callbackData.isNotEmpty())
+        callbackData.forEach { data ->
+            assertTrue(
+                data.toByteArray(Charsets.UTF_8).size <= 64,
+                "callback_data is too long for Telegram: $data"
+            )
+        }
+        assertTrue(callbackData.any { it.endsWith(":CR") })
+    }
+
+    @Test
+    fun `content repurpose format keyboard callback data fits Telegram limit`() {
+        val taskId = "11111111-1111-1111-1111-111111111111"
+
+        router.routeCallback(callback("m:$taskId:CR"))
+
+        val callbackData = editedReplyMarkupCallbackData()
+
+        assertTrue(callbackData.isNotEmpty())
+        callbackData.forEach { data ->
+            assertTrue(
+                data.toByteArray(Charsets.UTF_8).size <= 64,
+                "callback_data is too long for Telegram: $data"
+            )
+        }
+        assertTrue(callbackData.any { it == "f:$taskId:CR:PKG" })
     }
 
     @Test
@@ -237,6 +272,37 @@ class TelegramCommandRouterTest {
             .invocations
             .filter { it.method.name == "createTask" }
             .map { it.arguments[0] as CreateTranscriptionTaskCommand }
+    }
+
+    private fun sentReplyMarkupCallbackData(): List<String> {
+        val replyMarkup = Mockito.mockingDetails(messageSender)
+            .invocations
+            .filter { it.method.name == "sendText" }
+            .mapNotNull { it.arguments.getOrNull(2) as? Map<*, *> }
+            .lastOrNull()
+            ?: return emptyList()
+
+        return callbackDataFromReplyMarkup(replyMarkup)
+    }
+
+    private fun editedReplyMarkupCallbackData(): List<String> {
+        val replyMarkup = Mockito.mockingDetails(messageSender)
+            .invocations
+            .filter { it.method.name == "editMessageText" }
+            .mapNotNull { it.arguments.getOrNull(3) as? Map<*, *> }
+            .lastOrNull()
+            ?: return emptyList()
+
+        return callbackDataFromReplyMarkup(replyMarkup)
+    }
+
+    private fun callbackDataFromReplyMarkup(replyMarkup: Map<*, *>): List<String> {
+        val rows = replyMarkup["inline_keyboard"] as? List<*>
+            ?: return emptyList()
+
+        return rows
+            .flatMap { row -> row as? List<*> ?: emptyList<Any>() }
+            .mapNotNull { button -> (button as? Map<*, *>)?.get("callback_data") as? String }
     }
 
     private fun router(appProperties: AppProperties): TelegramCommandRouter {
