@@ -1,7 +1,11 @@
 SHELL := /bin/sh
 
-COMPOSE := docker compose
-COMPOSE_OBSERVABILITY := docker compose -f docker-compose.yml -f docker-compose.observability.yml
+DOCKER_COMPOSE ?= docker compose
+PYTHON ?= python
+CURL ?= curl -fsS
+
+COMPOSE := $(DOCKER_COMPOSE)
+COMPOSE_OBSERVABILITY := $(DOCKER_COMPOSE) -f docker-compose.yml -f docker-compose.observability.yml
 
 .DEFAULT_GOAL := help
 
@@ -18,7 +22,7 @@ test-bot: ## Run bot-service tests.
 
 .PHONY: test-worker
 test-worker: ## Run worker-service tests.
-	cd worker-service && pytest
+	cd worker-service && $(PYTHON) -m pytest
 
 .PHONY: compose-config
 compose-config: ## Validate base Docker Compose config.
@@ -58,19 +62,19 @@ obs-down: ## Stop the observability stack.
 
 .PHONY: health
 health: ## Check bot and worker health endpoints.
-	curl -fsS http://localhost:8080/actuator/health
-	curl -fsS http://localhost:9091/health
+	$(CURL) http://localhost:8080/actuator/health
+	$(CURL) http://localhost:9091/health
 
 .PHONY: metrics
 metrics: ## Check Link2Action metrics endpoints.
-	curl -fsS http://localhost:8080/actuator/prometheus | grep link2action
-	curl -fsS http://localhost:9091/metrics | grep link2action
+	$(CURL) http://localhost:8080/actuator/prometheus | grep link2action
+	$(CURL) http://localhost:9091/metrics | grep link2action
 
 .PHONY: prometheus-targets
 prometheus-targets: ## Show Prometheus target health.
-	curl -fsS http://localhost:9090/api/v1/targets
+	$(CURL) http://localhost:9090/api/v1/targets
 
 .PHONY: clean
 clean: ## Remove local build artifacts.
 	rm -rf bot-service/build worker-service/.pytest_cache .pytest_cache
-	find worker-service -type d -name __pycache__ -prune -exec rm -rf {} +
+	find worker-service/app worker-service/tests -type d -name __pycache__ -prune -exec rm -rf {} +
