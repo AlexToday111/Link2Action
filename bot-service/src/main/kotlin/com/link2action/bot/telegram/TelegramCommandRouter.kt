@@ -502,6 +502,14 @@ class TelegramCommandRouter(
 
         if (sent != null) {
             taskService.updateProgressMessageId(taskId, sent.messageId)
+        } else {
+            taskService.cancelWaitingTask(taskId, userId)
+            log.warn(
+                "Cancelled waiting transcription task because Telegram prompt could not be sent: taskId={}, userId={}, chatId={}",
+                taskId,
+                userId,
+                chatId
+            )
         }
     }
 

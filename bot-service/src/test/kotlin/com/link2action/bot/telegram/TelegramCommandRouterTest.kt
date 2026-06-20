@@ -76,6 +76,15 @@ class TelegramCommandRouterTest {
     }
 
     @Test
+    fun `failed processing mode prompt delivery cancels waiting task`() {
+        val taskId = UUID.fromString("11111111-1111-1111-1111-111111111111")
+
+        router.route(message(text = "https://youtu.be/example"))
+
+        Mockito.verify(taskService).cancelWaitingTask(taskId, USER_ID)
+    }
+
+    @Test
     fun `content repurpose format keyboard callback data fits Telegram limit`() {
         val taskId = "11111111-1111-1111-1111-111111111111"
 
