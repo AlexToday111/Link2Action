@@ -84,6 +84,70 @@ metadata.json
 
 ---
 
+## Observability
+
+Запуск проекта с Prometheus и Grafana:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.observability.yml up --build
+```
+
+Доступные URL:
+
+```text
+Prometheus: http://localhost:9090
+Grafana: http://localhost:3000
+Grafana credentials: admin / admin
+
+Bot metrics: http://localhost:8080/actuator/prometheus
+Worker metrics: http://localhost:9091/metrics
+Worker health: http://localhost:9091/health
+RabbitMQ management: http://localhost:15672
+RabbitMQ metrics: http://localhost:15692/metrics
+```
+
+Grafana dashboard `Link2Action Overview` показывает:
+
+* service health;
+* task throughput;
+* active tasks;
+* success/failure;
+* task duration;
+* worker stage duration;
+* RabbitMQ queue depth;
+* retry/DLQ visibility.
+
+Monitoring configs:
+
+```text
+monitoring/prometheus/prometheus.yml
+monitoring/grafana/provisioning/datasources/prometheus.yml
+monitoring/grafana/provisioning/dashboards/dashboards.yml
+monitoring/grafana/dashboards/link2action-overview.json
+monitoring/rabbitmq/enabled_plugins
+```
+
+Проверить Prometheus targets:
+
+```bash
+curl http://localhost:9090/api/v1/targets
+```
+
+Если RabbitMQ metrics не появились:
+
+* проверь, что включён plugin `rabbitmq_prometheus`;
+* проверь endpoint `rabbitmq:15692/metrics` внутри compose network;
+* проверь target `link2action-rabbitmq` в Prometheus.
+
+Grafana credentials можно переопределить:
+
+```env
+GRAFANA_ADMIN_USER=admin
+GRAFANA_ADMIN_PASSWORD=admin
+```
+
+---
+
 <div align="center">
 
 ## Запуск
