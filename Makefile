@@ -2,6 +2,7 @@ SHELL := /bin/sh
 
 DOCKER_COMPOSE ?= docker compose
 PYTHON ?= python
+WORKER_PYTHON ?= worker-service/.venv/bin/python
 CURL ?= curl -fsS
 
 COMPOSE := $(DOCKER_COMPOSE)
@@ -22,7 +23,11 @@ test-bot: ## Run bot-service tests.
 
 .PHONY: test-worker
 test-worker: ## Run worker-service tests.
-	cd worker-service && $(PYTHON) -m pytest
+	@if [ -x "$(WORKER_PYTHON)" ]; then \
+		$(WORKER_PYTHON) -m pytest worker-service; \
+	else \
+		cd worker-service && $(PYTHON) -m pytest; \
+	fi
 
 .PHONY: compose-config
 compose-config: ## Validate base Docker Compose config.

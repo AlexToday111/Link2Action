@@ -189,7 +189,7 @@ class TelegramCommandRouter(
 
                 1. Скопируй ссылку на видео.
                 2. Отправь её сюда обычным сообщением.
-                3. Выбери формат результата.
+                3. Выбери цель обработки и формат результата.
                 4. Я покажу прогресс обработки.
                 5. После обработки пришлю выбранные файлы.
 
@@ -1125,7 +1125,7 @@ class TelegramCommandRouter(
             return """
                 Ссылка получена.
 
-                Выбери формат результата:
+                Что ты хочешь получить?
             """.trimIndent()
         }
 
@@ -1378,7 +1378,7 @@ class TelegramCommandRouter(
         val downloadButtons = mutableListOf<Map<String, String>>()
 
         if (task.status == TranscriptionStatus.WAITING_FORMAT) {
-            rows.addAll((processingModeKeyboard(task.id)["inline_keyboard"] as List<List<Map<String, String>>>))
+            rows.addAll(processingModeRows(task.id))
             rows.add(listOf(button("Отмена", "$CALLBACK_FORMAT_CANCEL:${task.id}")))
         }
 
@@ -1436,16 +1436,22 @@ class TelegramCommandRouter(
 
     private fun processingModeKeyboard(taskId: UUID): Map<String, Any> {
         return inlineKeyboard(
+            *processingModeRows(taskId).toTypedArray(),
+            listOf(
+                button("Отмена", "$CALLBACK_FORMAT_CANCEL:$taskId"),
+                button("🏠 Меню", CALLBACK_MENU)
+            )
+        )
+    }
+
+    private fun processingModeRows(taskId: UUID): List<List<Map<String, String>>> {
+        return listOf(
             listOf(button("📄 Transcript", "$CALLBACK_MODE_SELECT:$taskId:${ProcessingMode.TRANSCRIPT.name}")),
             listOf(button("🧠 Summary", "$CALLBACK_MODE_SELECT:$taskId:${ProcessingMode.SUMMARY.name}")),
             listOf(button("✅ Action items", "$CALLBACK_MODE_SELECT:$taskId:${ProcessingMode.ACTION_ITEMS.name}")),
             listOf(button("📚 Study notes", "$CALLBACK_MODE_SELECT:$taskId:${ProcessingMode.STUDY_NOTES.name}")),
             listOf(button("💻 Tech tasks", "$CALLBACK_MODE_SELECT:$taskId:${ProcessingMode.TECH_TASKS.name}")),
-            listOf(button("📝 Content repurpose", "$CALLBACK_MODE_SELECT:$taskId:${ProcessingMode.CONTENT_REPURPOSE.name}")),
-            listOf(
-                button("Отмена", "$CALLBACK_FORMAT_CANCEL:$taskId"),
-                button("🏠 Меню", CALLBACK_MENU)
-            )
+            listOf(button("📝 Content repurpose", "$CALLBACK_MODE_SELECT:$taskId:${ProcessingMode.CONTENT_REPURPOSE.name}"))
         )
     }
 
