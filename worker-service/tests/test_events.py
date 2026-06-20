@@ -3,7 +3,7 @@ from uuid import UUID
 import pytest
 from pydantic import ValidationError
 
-from app.messaging.events import SourceType, TranscriptionRequestedEvent
+from app.messaging.events import ProcessingMode, SourceType, TranscriptionRequestedEvent, TranscriptionResultEvent
 
 
 def test_transcription_requested_event_parses_bot_payload():
@@ -20,7 +20,23 @@ def test_transcription_requested_event_parses_bot_payload():
     assert event.task_id == UUID("7f3a0f72-6e92-4e73-bdf7-efdf90c5aa31")
     assert event.source_type == SourceType.URL
     assert event.source_url == "https://youtu.be/example"
+    assert event.processing_mode == ProcessingMode.TRANSCRIPT
     assert event.requested_formats == {"TXT", "MD"}
+
+
+def test_transcription_requested_event_parses_processing_mode():
+    event = TranscriptionRequestedEvent.model_validate(
+        {
+            "taskId": "7f3a0f72-6e92-4e73-bdf7-efdf90c5aa31",
+            "sourceUrl": "https://youtu.be/example",
+            "processingMode": "ACTION_ITEMS",
+            "language": None,
+            "formats": ["MD"],
+            "createdAt": "2026-06-18T15:30:00Z",
+        }
+    )
+
+    assert event.processing_mode == ProcessingMode.ACTION_ITEMS
 
 
 def test_transcription_requested_event_parses_telegram_file_payload():
@@ -71,3 +87,18 @@ def test_old_url_event_without_source_type_remains_supported():
 
     assert event.source_type == SourceType.URL
     assert event.source_url == "https://youtu.be/old"
+    assert event.processing_mode == ProcessingMode.TRANSCRIPT
+
+
+def test_old_result_event_without_prompt_and_package_paths_remains_supported():
+    event = TranscriptionResultEvent.model_validate(
+        {
+            "taskId": "7f3a0f72-6e92-4e73-bdf7-efdf90c5aa31",
+            "status": "COMPLETED",
+            "resultTxtPath": "/data/results/task/transcript.txt",
+            "resultMdPath": "/data/results/task/transcript.md",
+        }
+    )
+
+    assert event.result_prompt_path is None
+    assert event.result_package_path is None

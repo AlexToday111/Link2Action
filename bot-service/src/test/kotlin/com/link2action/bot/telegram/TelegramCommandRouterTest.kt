@@ -4,6 +4,7 @@ import com.link2action.bot.artifact.TranscriptionTaskArtifactService
 import com.link2action.bot.config.AppProperties
 import com.link2action.bot.storage.StorageCleanupService
 import com.link2action.bot.task.CreateTranscriptionTaskCommand
+import com.link2action.bot.task.ProcessingMode
 import com.link2action.bot.task.TranscriptionSourceType
 import com.link2action.bot.task.TranscriptionTaskService
 import org.junit.jupiter.api.BeforeEach
@@ -49,6 +50,12 @@ class TelegramCommandRouterTest {
         assertEquals(TranscriptionSourceType.URL, command.sourceType)
         assertEquals("https://youtu.be/example", command.sourceUrl)
         assertNull(command.telegramFileId)
+        Mockito.verify(messageSender).sendText(
+            ArgumentMatchers.eq(CHAT_ID),
+            ArgumentMatchers.contains("Ссылка получена"),
+            ArgumentMatchers.argThat { markup -> markup.toString().contains("mode_select") },
+            ArgumentMatchers.eq(true)
+        )
     }
 
     @Test
@@ -168,6 +175,7 @@ class TelegramCommandRouterTest {
         router.route(message(text = "https://youtu.be/one"))
         router.route(message(voice = TelegramVoice(fileId = "voice-file-id", fileUniqueId = "voice-unique-id")))
         router.route(message(text = "/done"))
+        router.routeCallback(callback("batch_mode_select:ACTION_ITEMS"))
         router.routeCallback(callback("batch_format_select:BOTH"))
 
         val commands = createdTaskCommands()
@@ -176,6 +184,8 @@ class TelegramCommandRouterTest {
         assertEquals(TranscriptionSourceType.TELEGRAM_FILE, commands[1].sourceType)
         assertEquals(setOf("TXT", "MD"), commands[0].requestedFormats)
         assertEquals(setOf("TXT", "MD"), commands[1].requestedFormats)
+        assertEquals(ProcessingMode.ACTION_ITEMS, commands[0].processingMode)
+        assertEquals(ProcessingMode.ACTION_ITEMS, commands[1].processingMode)
     }
 
     @Test

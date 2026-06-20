@@ -64,6 +64,8 @@ class FakeExporter:
         return ExportedFiles(
             txt_path=Path("/data/results/task/transcript.txt"),
             md_path=Path("/data/results/task/transcript.md"),
+            prompt_path=Path("/data/results/task/llm_prompt.txt"),
+            package_path=Path("/data/results/task/llm_package.zip"),
         )
 
 
@@ -82,6 +84,8 @@ def test_processor_successful_pipeline_publishes_progress_and_cleans_up():
     assert result.language == "en"
     assert result.result_txt_path == "/data/results/task/transcript.txt"
     assert result.result_md_path == "/data/results/task/transcript.md"
+    assert result.result_prompt_path == "/data/results/task/llm_prompt.txt"
+    assert result.result_package_path == "/data/results/task/llm_package.zip"
     assert [event.status for event in progress_events] == [
         TranscriptionStatus.DOWNLOADING,
         TranscriptionStatus.TRANSCRIBING,
@@ -89,6 +93,7 @@ def test_processor_successful_pipeline_publishes_progress_and_cleans_up():
     ]
     assert transcriber.calls == [(Path("/tmp/audio.mp3"), None)]
     assert exporter.calls[0]["requested_formats"] == {"TXT", "MD"}
+    assert exporter.calls[0]["processing_mode"].value == "TRANSCRIPT"
     assert downloader.cleanup_calls == [TASK_ID]
 
 
