@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: Link2Action
+    orgId: 1
+    folder: Link2Action
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards
