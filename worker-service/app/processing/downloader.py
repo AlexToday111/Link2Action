@@ -15,6 +15,11 @@ from yt_dlp.utils import DownloadError
 
 log = logging.getLogger(__name__)
 
+YOUTUBE_COOKIES_HINT = (
+    "YouTube requires authentication cookies for this video. Export browser cookies "
+    "to a Netscape cookies.txt file and set YT_DLP_COOKIES_FILE to the mounted path."
+)
+
 
 @dataclass(frozen=True)
 class VideoMetadata:
@@ -34,9 +39,15 @@ class VideoTooLongError(ValueError):
 
 
 class AudioDownloader:
-    def __init__(self, downloads_base_path: Path, max_duration_seconds: int):
+    def __init__(
+        self,
+        downloads_base_path: Path,
+        max_duration_seconds: int,
+        cookies_file: Path | None = None,
+    ):
         self._downloads_base_path = downloads_base_path
         self._max_duration_seconds = max_duration_seconds
+        self._cookies_file = cookies_file
 
     def download(self, task_id: UUID, source_url: str) -> DownloadedAudio:
         task_dir = self.task_download_dir(task_id)
@@ -52,26 +63,28 @@ class AudioDownloader:
             )
 
         log.info("Downloading audio taskId=%s", task_id)
-        options = {
-            "format": "bestaudio/best",
-            "outtmpl": str(task_dir / "%(id)s.%(ext)s"),
-            "noplaylist": True,
-            "quiet": True,
-            "no_warnings": True,
-            "postprocessors": [
-                {
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": "192",
-                }
-            ],
-        }
+        options = self._base_options()
+        options.update(
+            {
+                "format": "bestaudio/best",
+                "outtmpl": str(task_dir / "%(id)s.%(ext)s"),
+                "postprocessors": [
+                    {
+                        "key": "FFmpegExtractAudio",
+                        "preferredcodec": "mp3",
+                        "preferredquality": "192",
+                    }
+                ],
+            }
+        )
 
         try:
             with YoutubeDL(options) as ydl:
                 ydl.download([source_url])
         except DownloadError as exc:
-            raise RuntimeError("Video is unavailable or audio download failed") from exc
+            raise RuntimeError(
+                self._download_error_message(exc, "Video is unavailable or audio download failed")
+            ) from exc
 
         audio_path = self._find_downloaded_audio(task_dir)
         if audio_path is None:
@@ -84,18 +97,19 @@ class AudioDownloader:
         )
 
     def extract_metadata(self, source_url: str) -> VideoMetadata:
-        options = {
-            "skip_download": True,
-            "noplaylist": True,
-            "quiet": True,
-            "no_warnings": True,
-        }
+        options = self._base_options()
+        options.update({"skip_download": True})
 
         try:
             with YoutubeDL(options) as ydl:
                 info = ydl.extract_info(source_url, download=False)
         except DownloadError as exc:
-            raise RuntimeError("Video is unavailable or metadata could not be read") from exc
+            raise RuntimeError(
+                self._download_error_message(
+                    exc,
+                    "Video is unavailable or metadata could not be read",
+                )
+            ) from exc
 
         duration = info.get("duration")
         duration_seconds = int(duration) if duration is not None else None
@@ -113,6 +127,30 @@ class AudioDownloader:
 
     def task_download_dir(self, task_id: UUID) -> Path:
         return self._downloads_base_path / str(task_id)
+
+    def _base_options(self) -> dict:
+        options = {
+            "noplaylist": True,
+            "quiet": True,
+            "no_warnings": True,
+        }
+
+        if self._cookies_file is not None:
+            if not self._cookies_file.exists():
+                raise RuntimeError(
+                    f"Configured yt-dlp cookies file does not exist: {self._cookies_file}"
+                )
+
+            options["cookiefile"] = str(self._cookies_file)
+
+        return options
+
+    def _download_error_message(self, exc: DownloadError, fallback: str) -> str:
+        message = str(exc).lower()
+        if "sign in to confirm" in message or "not a bot" in message:
+            return YOUTUBE_COOKIES_HINT
+
+        return fallback
 
     def _find_downloaded_audio(self, task_dir: Path) -> Path | None:
         candidates = [

@@ -159,7 +159,21 @@ GRAFANA_ADMIN_PASSWORD=admin
 ```env
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 TELEGRAM_BOT_USERNAME=your_bot_username
+YT_DLP_COOKIES_FILE=
 ```
+
+### YouTube cookies
+
+Некоторые YouTube-видео могут падать с ошибкой `Sign in to confirm you’re not a bot`.
+Это ограничение YouTube на стороне `yt-dlp`, а не ошибка Grafana, Prometheus или RabbitMQ.
+
+Для таких видео экспортируйте cookies из браузера в Netscape `cookies.txt`, положите файл в локальную директорию `data/cookies/youtube.txt` и укажите путь внутри контейнера:
+
+```env
+YT_DLP_COOKIES_FILE=/data/cookies/youtube.txt
+```
+
+После изменения `.env` перезапустите worker или весь compose stack. Cookies-файл не нужно коммитить: директория `data/` предназначена для локальных данных.
 
 Запустите проект:
 

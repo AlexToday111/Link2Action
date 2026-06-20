@@ -107,6 +107,7 @@ services:
 
       RESULTS_BASE_PATH: /data/results
       DOWNLOADS_BASE_PATH: /data/downloads
+      YT_DLP_COOKIES_FILE: ${YT_DLP_COOKIES_FILE:-}
 
       WHISPER_MODEL: small
       WHISPER_DEVICE: cpu

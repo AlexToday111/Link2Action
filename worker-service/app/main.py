@@ -31,6 +31,7 @@ def main() -> None:
             url_downloader=AudioDownloader(
                 downloads_base_path=settings.downloads_base_path,
                 max_duration_seconds=settings.max_video_duration_seconds,
+                cookies_file=settings.yt_dlp_cookies_file,
             ),
             telegram_downloader=TelegramFileDownloader(settings),
         ),

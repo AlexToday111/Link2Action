@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -77,6 +77,7 @@ class Settings(BaseSettings):
 
     results_base_path: Path = Field(Path("/data/results"), validation_alias="RESULTS_BASE_PATH")
     downloads_base_path: Path = Field(Path("/data/downloads"), validation_alias="DOWNLOADS_BASE_PATH")
+    yt_dlp_cookies_file: Path | None = Field(None, validation_alias="YT_DLP_COOKIES_FILE")
 
     whisper_model: str = Field("small", validation_alias="WHISPER_MODEL")
     whisper_device: str = Field("cpu", validation_alias="WHISPER_DEVICE")
@@ -111,6 +112,14 @@ class Settings(BaseSettings):
 
         value = self.whisper_language.strip()
         return value or None
+
+    @field_validator("yt_dlp_cookies_file", mode="before")
+    @classmethod
+    def empty_cookies_file_as_none(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+
+        return value
 
 
 def get_settings() -> Settings:

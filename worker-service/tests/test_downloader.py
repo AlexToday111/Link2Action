@@ -12,6 +12,7 @@ class FakeYoutubeDL:
     metadata = {"title": "Video title", "duration": 120}
     fail_extract = False
     fail_download = False
+    extract_error_message = "metadata failed"
     instances = []
 
     def __init__(self, options):
@@ -27,7 +28,7 @@ class FakeYoutubeDL:
 
     def extract_info(self, source_url, download):
         if FakeYoutubeDL.fail_extract:
-            raise DownloadError("metadata failed")
+            raise DownloadError(FakeYoutubeDL.extract_error_message)
 
         return FakeYoutubeDL.metadata
 
@@ -43,6 +44,7 @@ def reset_fake_youtube_dl(monkeypatch):
     FakeYoutubeDL.metadata = {"title": "Video title", "duration": 120}
     FakeYoutubeDL.fail_extract = False
     FakeYoutubeDL.fail_download = False
+    FakeYoutubeDL.extract_error_message = "metadata failed"
     FakeYoutubeDL.instances = []
     monkeypatch.setattr("app.processing.downloader.YoutubeDL", FakeYoutubeDL)
 
@@ -55,6 +57,42 @@ def test_extract_metadata_success(tmp_path):
     assert metadata.title == "Video title"
     assert metadata.duration_seconds == 120
     assert FakeYoutubeDL.instances[0].options["skip_download"] is True
+
+
+def test_cookies_file_is_passed_to_yt_dlp_options(tmp_path):
+    cookies_file = tmp_path / "cookies.txt"
+    cookies_file.write_text("# Netscape HTTP Cookie File\n", encoding="utf-8")
+    downloader = AudioDownloader(
+        tmp_path,
+        max_duration_seconds=3600,
+        cookies_file=cookies_file,
+    )
+
+    downloader.extract_metadata("https://youtu.be/example")
+
+    assert FakeYoutubeDL.instances[0].options["cookiefile"] == str(cookies_file)
+
+
+def test_missing_cookies_file_raises_readable_error(tmp_path):
+    downloader = AudioDownloader(
+        tmp_path,
+        max_duration_seconds=3600,
+        cookies_file=tmp_path / "missing-cookies.txt",
+    )
+
+    with pytest.raises(RuntimeError, match="cookies file does not exist"):
+        downloader.extract_metadata("https://youtu.be/example")
+
+
+def test_youtube_bot_check_returns_cookie_hint(tmp_path):
+    FakeYoutubeDL.fail_extract = True
+    FakeYoutubeDL.extract_error_message = (
+        "ERROR: [youtube] id: Sign in to confirm you’re not a bot. Use --cookies."
+    )
+    downloader = AudioDownloader(tmp_path, max_duration_seconds=3600)
+
+    with pytest.raises(RuntimeError, match="YT_DLP_COOKIES_FILE"):
+        downloader.extract_metadata("https://youtu.be/example")
 
 
 def test_too_long_video_raises(tmp_path):
